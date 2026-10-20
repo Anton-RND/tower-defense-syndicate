@@ -14,6 +14,7 @@ import { registerClanRoutes } from './routes/clanRoutes.js';
 import { registerDevRoutes } from './routes/devRoutes.js';
 import { registerEconomyRoutes } from './routes/economyRoutes.js';
 import { registerMaterialsRoutes } from './routes/materialsRoutes.js';
+import { registerMarketRoutes } from './routes/marketRoutes.js';
 import { registerPvpRoutes } from './routes/pvpRoutes.js';
 import { registerShopRoutes } from './routes/shopRoutes.js';
 import { registerWorkshopRoutes } from './routes/workshopRoutes.js';
@@ -117,6 +118,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   registerAdsRoutes(app, ctx);
   registerPvpRoutes(app, ctx);
   registerClanRoutes(app, ctx);
+  registerMarketRoutes(app, ctx);
   registerDevRoutes(app, ctx);
 
   return app;

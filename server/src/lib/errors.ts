@@ -120,7 +120,18 @@ export const ErrorCodes = {
   /** Клан основан, но оплата не прошла: повторное основание невозможно, пока висит слот. */
   CLAN_UNPAID: 'CLAN_UNPAID',
   /** Окно подтверждения взноса истекло, а доказательства списания в журнале нет. */
-  CLAN_PENDING_EXPIRED: 'CLAN_PENDING_EXPIRED'
+  CLAN_PENDING_EXPIRED: 'CLAN_PENDING_EXPIRED',
+  // Чёрный рынок (Часть 2)
+  /** Цена за единицу вне коридора вида: защита и от демпинга ниже цеха, и от витрины-мусора. */
+  MARKET_PRICE_OUT_OF_RANGE: 'MARKET_PRICE_OUT_OF_RANGE',
+  /** Лот уже продан, снят или просрочен — то есть захватить его нельзя. */
+  MARKET_LOT_TAKEN: 'MARKET_LOT_TAKEN',
+  /** Продавец выкупает собственный лот: единственный способ перегнать астерий в SEC. */
+  MARKET_SELF_PURCHASE: 'MARKET_SELF_PURCHASE',
+  /** Достигнут потолок активных лотов одного продавца. */
+  MARKET_LOT_LIMIT: 'MARKET_LOT_LIMIT',
+  /** Лот не найден (чужой id, уже закрыт или удалён). */
+  MARKET_LOT_NOT_FOUND: 'MARKET_LOT_NOT_FOUND'
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

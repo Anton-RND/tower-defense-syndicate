@@ -140,13 +140,23 @@ export async function findOpponent(
 }
 
 /**
- * Публичный ярлык защитника.
+ * Публичный ярлык по внутреннему id.
  *
- * Ни `socialId`, ни имя из VK сюда не попадают: бой показывает чужую базу, и
- * персональных данных для этого не нужно. Хеш внутреннего id стабилен (один и тот же
- * соперник в двух боях выглядит одинаково) и необратим.
+ * Ни `socialId`, ни имя из VK сюда не попадают: и бой, и рынок показывают чужую
+ * сущность, и персональных данных для этого не нужно. Хеш внутреннего id стабилен
+ * (один и тот же соперник в двух боях выглядит одинаково) и необратим.
+ *
+ * Функция принимает id, а не аккаунт, потому что у рынка нет чужого документа
+ * игрока: есть только лот с `sellerId`. Значит, и ярлык продавца, и ярлык защитника
+ * обязаны считаться ОДНИМ кодом — иначе один игрок получил бы два разных псевдонима
+ * в двух панелях одного интерфейса, и это уже не приватность, а путаница.
  */
-export function defenderLabel(defender: UserAccount): string {
-  const hash = hashSeed(defender.id).toString(36).padStart(7, '0');
+export function publicLabel(userId: string): string {
+  const hash = hashSeed(userId).toString(36).padStart(7, '0');
   return `Игрок #${hash.slice(-4)}`;
+}
+
+/** Публичный ярлык защитника (см. `publicLabel`). */
+export function defenderLabel(defender: UserAccount): string {
+  return publicLabel(defender.id);
 }

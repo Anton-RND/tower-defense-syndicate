@@ -12,6 +12,9 @@ import type { UserStore } from '../modules/user/user.store.js';
 import { MemoryClanStore } from '../modules/clan/clan.store.js';
 import { MongoClanStore } from '../modules/clan/mongo.store.js';
 import type { ClanStore } from '../modules/clan/clan.store.js';
+import { MemoryLotStore } from '../modules/market/lot.store.js';
+import { MongoLotStore } from '../modules/market/mongo.store.js';
+import type { LotStore } from '../modules/market/lot.store.js';
 
 /**
  * Сборка зависимостей процесса: конфиг → сторы → журнал → токены → логгер.
@@ -31,6 +34,8 @@ export interface AppContext {
    * reconcile живут в clan/commit.ts, а не в транспорте.
    */
   readonly clans: ClanStore;
+  /** Лоты чёрного рынка (Часть 2). Третья учётная сущность: не игрок и не клан. */
+  readonly lots: LotStore;
   readonly ledger: LedgerStore;
   readonly tokens: TokenService;
   readonly logger: Logger;
@@ -45,6 +50,7 @@ export interface AppContext {
 interface Stores {
   users: UserStore;
   clans: ClanStore;
+  lots: LotStore;
   ledger: LedgerStore;
 }
 
@@ -56,22 +62,29 @@ function buildStores(config: AppConfig, logger: Logger): Stores {
     return {
       users: new MongoUserStore(uri, { logger }),
       clans: new MongoClanStore(uri, { logger }),
+      lots: new MongoLotStore(uri, { logger }),
       ledger: new MongoLedgerStore(uri, { logger })
     };
   }
-  return { users: new MemoryUserStore(), clans: new MemoryClanStore(), ledger: new MemoryLedgerStore() };
+  return {
+    users: new MemoryUserStore(),
+    clans: new MemoryClanStore(),
+    lots: new MemoryLotStore(),
+    ledger: new MemoryLedgerStore()
+  };
 }
 
 export function createContext(config: AppConfig = loadConfig(), overrides: Partial<AppContext> = {}): AppContext {
   const logger = overrides.logger ?? new Logger(config.logLevel);
-  const stores = overrides.users && overrides.ledger && overrides.clans
-    ? { users: overrides.users, clans: overrides.clans, ledger: overrides.ledger }
+  const stores = overrides.users && overrides.ledger && overrides.clans && overrides.lots
+    ? { users: overrides.users, clans: overrides.clans, lots: overrides.lots, ledger: overrides.ledger }
     : buildStores(config, logger);
 
   const context: AppContext = {
     config,
     users: stores.users,
     clans: stores.clans,
+    lots: stores.lots,
     ledger: stores.ledger,
     tokens:
       overrides.tokens ??
@@ -81,10 +94,20 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
     now: overrides.now ?? (() => new Date()),
     async connect(): Promise<void> {
       // Порядок не важен: коллекции создаёт сам mongoose при первом обращении.
-      await Promise.all([stores.users.connect(), stores.clans.connect(), stores.ledger.connect()]);
+      await Promise.all([
+        stores.users.connect(),
+        stores.clans.connect(),
+        stores.lots.connect(),
+        stores.ledger.connect()
+      ]);
     },
     async close(): Promise<void> {
-      await Promise.all([stores.users.disconnect(), stores.clans.disconnect(), stores.ledger.disconnect()]);
+      await Promise.all([
+        stores.users.disconnect(),
+        stores.clans.disconnect(),
+        stores.lots.disconnect(),
+        stores.ledger.disconnect()
+      ]);
     }
   };
   return context;

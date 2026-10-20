@@ -128,6 +128,7 @@
     <div class="panel"><h2>Оборона <span class="tag" id="defTag">&mdash;</span></h2><div id="defBody">&mdash;</div></div>
     <div class="panel"><h2>PvP <span class="tag" id="pvpTag">&mdash;</span></h2><div id="pvpBody">&mdash;</div></div>
     <div class="panel"><h2>Клан <span class="tag" id="clanTag">&mdash;</span></h2><div id="clanBody">&mdash;</div></div>
+    <div class="panel"><h2>Рынок <span class="tag" id="mktTag">&mdash;</span></h2><div id="mktBody">&mdash;</div></div>
     <div class="panel"><h2>Журнал</h2><div id="log"></div></div>
   </aside>
 </main>
@@ -273,6 +274,7 @@ async function refresh() {
     await api('GET', '/v1/economy');
     if (!S.blueprints) await loadBlueprints();
     await loadClan();
+    await loadMarket();
     renderAll();
   } catch (error) {
     log('обновление: ' + error.message, 'err');
@@ -2428,6 +2430,70 @@ function METAL_ROWS(treasury) {
     .join('');
 }
 
+/**
+ * Витрина рынка. Отдельный запрос по той же причине, что клан: лоты живут не в
+ * документе игрока, и их список не должен приходить на каждый тик экономики.
+ */
+async function loadMarket() {
+  try {
+    S.market = await api('GET', '/v1/market');
+  } catch (error) {
+    S.market = null;
+    log('рынок: ' + error.message, 'err');
+  }
+}
+
+function renderMarket() {
+  const tag = $('mktTag');
+  const body = $('mktBody');
+  if (!S.market) {
+    tag.innerHTML = '&mdash;';
+    body.innerHTML = '<span class="muted">витрина рынка не загружена</span>';
+    return;
+  }
+  const market = S.market.market;
+  const rules = S.market.rules;
+  const junkOptions = (rules.corridors || []).map((c) =>
+    '<option value="' + esc(c.junk) + '">' + esc(c.junk) + ' · ' + c.minPerUnit + '–' + c.maxPerUnit + ' SEC/шт</option>'
+  ).join('');
+
+  const feed = (market.lots || []).map((lot) =>
+    '<tr><td>' + esc(lot.junk) + ' <span class="muted">' + fmtNum(lot.amount) + ' шт · ' + esc(lot.seller) + '</span></td>' +
+    '<td class="num">' + fmtNum(lot.pricePerUnit) + '</td>' +
+    '<td class="num">' + fmtNum(lot.total) + '</td>' +
+    '<td class="num"><button onclick="TD.marketBuy(\'' + lot.id + '\')">выкупить</button></td></tr>'
+  ).join('');
+
+  const mine = (market.mine || []).map((lot) =>
+    '<tr><td>' + esc(lot.junk) + ' <span class="muted">' + fmtNum(lot.amount) + ' шт</span></td>' +
+    '<td class="num">' + fmtNum(lot.total) + '</td>' +
+    '<td class="num muted">+' + fmtNum(lot.net) + '</td>' +
+    '<td class="num"><button onclick="TD.marketCancel(\'' + lot.id + '\')">снять</button></td></tr>'
+  ).join('');
+
+  const depth = (market.depth || [])
+    .filter((d) => d.lots > 0)
+    .map((d) => row(d.junk, d.lots + ' лот. · ' + fmtNum(d.units) + ' шт · ' + d.minPerUnit + '–' + d.maxPerUnit + ' SEC/шт'))
+    .join('');
+
+  tag.innerHTML = fmtNum((market.lots || []).length) + ' лотов';
+  body.innerHTML =
+    '<table><tr><th>лот</th><th class="num">SEC/шт</th><th class="num">цена</th><th class="num"></th></tr>' +
+    (feed || '<tr><td colspan="4" class="muted">чужих лотов нет — рынок пуст</td></tr>') + '</table>' +
+    (mine
+      ? '<table style="margin-top:6px"><tr><th>мои лоты</th><th class="num">цена</th><th class="num">получу</th><th class="num"></th></tr>' +
+        mine + '</table>'
+      : '') +
+    (depth ? '<table style="margin-top:6px">' + depth + '</table>' : '') +
+    '<div class="row" style="margin-top:6px"><select id="mktJunk">' + junkOptions + '</select>' +
+    '<input type="number" id="mktAmount" value="10" min="' + rules.minUnits + '" max="' + rules.maxUnits + '" style="width:64px">' +
+    '<input type="number" id="mktPrice" value="50" min="1" style="width:70px" placeholder="SEC/шт">' +
+    '<button onclick="TD.marketSell()">выставить</button></div>' +
+    '<p class="hint">Хлам при выставлении уходит в эскроу сразу: объявление без товара физически невозможно. ' +
+    'Комиссия рынка ' + Math.round(rules.commission * 100) + '% сгорания при продаже — монета из обращения ' +
+    'уходит, а не переходит другому игроку. Срок лота ' + fmtMs(rules.lotTtlMs) + ', потом хлам возвращается.</p>';
+}
+
 function renderPvp() {
   const tag = $('pvpTag');
   const body = $('pvpBody');
@@ -3385,6 +3451,43 @@ const TD = {
       log('клан ' + result.result.clan.name + ' расформирован', 'ok');
       await loadClan();
     });
+  },
+
+  // ─── Чёрный рынок ───────────────────────────────────────────────────────────
+
+  marketSell() {
+    const junk = ($('mktJunk').value || 'chips');
+    const amount = Number(($('mktAmount').value || 1));
+    const pricePerUnit = Number(($('mktPrice').value || 1));
+    return act('выставление лота', async function () {
+      const result = await api('POST', '/v1/market/lots', { junk, amount, pricePerUnit });
+      const lot = result.result.lot;
+      // Показываем `net`, а не `total`: продавец договаривается о чистых, а не о
+      // грязных. Скажи мы здесь полную цену, игрок увидел бы «продал за 500»,
+      // получил 475 и обвинил рынок в пропаже 25.
+      log('лот ' + lot.id + ': ' + amount + '×' + junk + ' за ' + fmtNum(lot.total) +
+        ' SEC · получите ' + fmtNum(lot.net) + ' (комиссия ' + fmtNum(lot.commission) + ')', 'ok');
+      await loadMarket();
+    });
+  },
+
+  marketBuy(lotId) {
+    return act('выкуп лота', async function () {
+      const result = await api('POST', '/v1/market/lots/' + encodeURIComponent(lotId) + '/buy', {});
+      const lot = result.result.lot;
+      log('лот выкуплен: ' + fmtNum(lot.amount) + '×' + lot.junk + ' за ' + fmtNum(lot.total) + ' SEC' +
+        (result.result.settled ? '' : ' · деньги продавцу ещё не доведены, рынок разберёт сам'),
+        result.result.settled ? 'ok' : 'err');
+      await loadMarket();
+    });
+  },
+
+  marketCancel(lotId) {
+    return act('снятие лота', async function () {
+      await api('POST', '/v1/market/lots/' + encodeURIComponent(lotId) + '/cancel', {});
+      log('лот снят, хлам вернулся на склад', 'ok');
+      await loadMarket();
+    });
   }
 };
 
@@ -3403,6 +3506,7 @@ function renderAll() {
   renderDefense();
   renderPvp();
   renderClan();
+  renderMarket();
   renderAnalysis();
   if (!S.replay) draw();
 }

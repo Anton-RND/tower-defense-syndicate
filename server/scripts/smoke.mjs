@@ -31,6 +31,9 @@
  *  - Клан (P2): основание за астериев, взнос в казну, вступление по имени вторым
  *    аккаунтом, выход, отказ расформировать непустую казну, причины clan_create и
  *    clan_deposit в журнале;
+ *  - Рынок (P4): выставление лота (эскроу хлама), коридор цены, отказ выкупить свой
+ *    лот, выкуп вторым аккаунтом, снятие чужого лота, сгорание комиссии (1000 у
+ *    покупателя → 950 продавцу), причины market_trade и market_payout в журнале;
  *  - Ledger: каждая причина движения реально дошла до журнала;
  *  - Долг: возврат уже потраченного пака уводит сырьё в минус и блокирует траты.
  *
@@ -540,6 +543,59 @@ async function main() {
   if (!Array.isArray(createdEntries.entries)) fail('журнал по clan_create не вернулся списком');
   const depositEntries = await step('журнал взносов', 'GET', '/v1/ledger?reason=clan_deposit&limit=10');
   if (!Array.isArray(depositEntries.entries)) fail('журнал по clan_deposit не вернулся списком');
+
+  token = mainToken;
+
+  // ─── P4: чёрный рынок через HTTP ────────────────────────────────────────────
+  // Рынок — единственный домен, где одна операция касается трёх документов (лот,
+  // покупатель, продавец), поэтому смоук прогоняет его двумя аккаунтами и проверяет
+  // главное свойство денег: суммарная монета двоих проседает ровно на комиссию.
+  const sellerLogin = await step('dev-login (продавец рынка)', 'POST', '/v1/auth/dev-login', { socialId: `dev-mkt-seller-${RUN}` });
+  token = sellerLogin.token;
+  await step('грант хлама на продажу', 'POST', '/v1/dev/grant', { chips: 500 });
+
+  const marketBefore = await step('витрина рынка до объявления', 'GET', '/v1/market');
+  if (typeof marketBefore.rules?.commission !== 'number') fail('market.rules.commission отсутствует — UI не знает комиссию до продажи');
+  if (!Array.isArray(marketBefore.market?.corridors ?? marketBefore.rules?.corridors)) fail('у рынка нет коридоров цен — витрина не знает границ');
+
+  const sell = await step('выставить 20 чипов по 50 SEC', 'POST', '/v1/market/lots', { junk: 'chips', amount: 20, pricePerUnit: 50 });
+  const soldLot = sell.result?.lot;
+  if (!soldLot || soldLot.status !== 'listed') fail('лот не вышел в витрину после выставления');
+  if (soldLot?.total !== 1000) fail(`лот посчитал цену ${soldLot?.total} вместо 1000`);
+  if (soldLot?.net !== 950) fail(`продавец увидит ${soldLot?.net} вместо 950 чистыми при комиссии 5%`);
+  await expectRefusal('цена вне коридора', 'POST', '/v1/market/lots', { junk: 'chips', amount: 5, pricePerUnit: 1 }, 'MARKET_PRICE_OUT_OF_RANGE');
+  await expectRefusal('собственный лот не выкупишь', 'POST', `/v1/market/lots/${encodeURIComponent(soldLot?.id ?? '')}/buy`, {}, 'MARKET_SELF_PURCHASE');
+
+  const buyerLogin = await step('dev-login (покупатель рынка)', 'POST', '/v1/auth/dev-login', { socialId: `dev-mkt-buyer-${RUN}` });
+  const sellerToken = token;
+  token = buyerLogin.token;
+  await step('грант монеты покупателю', 'POST', '/v1/dev/grant', { sec: 2000 });
+  const buyerWallet = (await step('кошелёк покупателя', 'GET', '/v1/economy')).economy?.resources?.secSpendable ?? 0;
+
+  const buy = await step('выкупить лот', 'POST', `/v1/market/lots/${encodeURIComponent(soldLot?.id ?? '')}/buy`, {});
+  if (buy.result?.settled !== true) fail('покупка не подтверждена полностью — деньги зависли до reconcile');
+  if (buy.result?.lot?.status !== 'sold') fail('лот остался непроданным после выкупа');
+  const buyerAfter = (await step('кошелёк покупателя после', 'GET', '/v1/economy')).economy?.resources?.secSpendable ?? 0;
+  if (buyerWallet - buyerAfter !== 1000) fail(`покупатель заплатил ${buyerWallet - buyerAfter} вместо 1000`);
+  // Чужой лот не снимается. Проверка идёт ПОКА мы покупатель, иначе «чужак»
+  // превращается в продавца с его собственным лотом, и отказ был бы по другой
+  // причине (лот продан), а не по правам. Порядок в домене тоже верный: сначала
+  // «не твой», потом «не состояние» — чужаку не положено узнавать статус лота.
+  await expectRefusal('чужой лот не снять', 'POST', `/v1/market/lots/${encodeURIComponent(soldLot?.id ?? '')}/cancel`, {}, 'FORBIDDEN');
+
+  token = sellerToken;
+  const sellerWallet = (await step('кошелёк продавца', 'GET', '/v1/economy')).economy?.resources?.sec ?? 0;
+  if (sellerWallet < 950) fail(`продавец получил ${sellerWallet} вместо ожидаемых ≥950 чистыми`);
+  console.log(`     рынок: 1000 у покупателя → 950 продавцу, 50 SEC сгорело (комиссия)`);
+
+  // Второй лот снимаем: хлам обязан вернуться владельцу, а не остаться в эскроу.
+  const second = await step('выставить второй лот', 'POST', '/v1/market/lots', { junk: 'chips', amount: 5, pricePerUnit: 60 });
+  const cancelled = await step('снять второй лот', 'POST', `/v1/market/lots/${encodeURIComponent(second.result?.lot?.id ?? '')}/cancel`, {});
+  if (cancelled.result?.lot?.status !== 'cancelled') fail('лот не стал снятым');
+
+  const marketLedger = await step('журнал сделок', 'GET', '/v1/ledger?reason=market_trade&limit=10');
+  if (!Array.isArray(marketLedger.entries)) fail('журнал по market_trade не вернулся списком');
+  await step('журнал выплат продавцам', 'GET', '/v1/ledger?reason=market_payout&limit=10');
 
   token = mainToken;
 

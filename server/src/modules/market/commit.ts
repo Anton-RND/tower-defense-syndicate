@@ -1,0 +1,368 @@
+import { MARKET_FEED_LIMIT, MARKET_MAX_ACTIVE_LOTS } from '../../config/market.js';
+import type { EconomyConfig } from '../../config/env.js';
+import { junkTotal } from '../../config/workshop.js';
+import { AppError, ErrorCodes } from '../../lib/errors.js';
+import { makeIdempotencyKey, type LedgerDraft } from '../ledger/ledger.types.js';
+import type { LedgerStore } from '../ledger/ledger.store.js';
+import type { UserAccount } from '../user/user.types.js';
+import type { UserStore } from '../user/user.store.js';
+import type { LotState } from './lot.types.js';
+import type { LotStore } from './lot.store.js';
+import {
+  activateLot,
+  buildLot,
+  checkListing,
+  claimLot,
+  escrowJunk,
+  lotNet,
+  markPaid,
+  paySeller,
+  releaseLot,
+  returnJunk,
+  settleBuyer,
+  unclaimLot,
+  type ListingInput
+} from './service.js';
+
+/**
+ * Протоколы чёрного рынка (Часть 2) — операции над ТРЕМЯ документами: лот,
+ * покупатель, продавец. Общей транзакции у нас нет ни для двух, ни для трёх, поэтому
+ * каждый шаг обязан быть либо завершённым, либо различимо незавершённым.
+ *
+ * Порядок шагов — часть контракта, и он выведен из того же принципа, что у кланов
+ * и рейдов: **потерянная ценность игрока хуже зависшей записи**. Отсюда:
+ *
+ *  1. Лот вставляется `pending_escrow` и становится видимым ТОЛЬКО после того, как
+ *     хлам реально списан. Витрина не имеет права показать товар, которого нет.
+ *  2. Покупка: сначала атомарный захват лота (CAS), потом деньги. Захват до денег
+ *     означает, что при падении между шагами товар «заморожен» за покупателем, а
+ *     не продано дважды; деньги до захвата означали бы списание у двоих и товар у одного.
+ *  3. Выплата продавцу — последний шаг, и её отсутствие лечится reconcile-ом по
+ *     доказательству списания у покупателя в журнале.
+ *
+ * Арбитр во всех трёх случаях — `LedgerStore.hasKey`: журнал знает, состоялась ли
+ * ценность, а статус документа знает только, что мы про неё думали.
+ */
+
+export interface MarketDeps {
+  users: UserStore;
+  lots: LotStore;
+  ledger: LedgerStore;
+  idFactory: () => string;
+  /** Звонок провала компенсационного шага: сигнал для фоновой помощи, а не тихая потеря. */
+  onError?: (error: Error, context: Record<string, unknown>) => void;
+}
+
+async function commitDrafts(deps: MarketDeps, drafts: LedgerDraft[]): Promise<void> {
+  if (drafts.length === 0) return;
+  await deps.ledger.appendMany(drafts);
+}
+
+function notFound(message: string): AppError {
+  return new AppError(ErrorCodes.MARKET_LOT_NOT_FOUND, 404, message);
+}
+
+// ─── Выставление лота ─────────────────────────────────────────────────────────
+
+export interface ListResult {
+  lot: LotState;
+  account: UserAccount;
+}
+
+/** Оболочка лота → эскроу хлама → активация витрины. См. шапку файла, пункт 1. */
+export async function listLot(
+  deps: MarketDeps,
+  sellerId: string,
+  input: ListingInput,
+  now: Date
+): Promise<ListResult> {
+  const fresh = await deps.users.findById(sellerId);
+  if (!fresh) throw new AppError(ErrorCodes.NOT_FOUND, 404, 'Игрок не найден', { sellerId });
+
+  // Дешёвые проверки до вставки: занять слот рынка мусорным объявлением — значит
+  // отобрать его у того, кто реально готов торговать.
+  const listing = checkListing(fresh, input);
+  const active = await deps.lots.countActiveBySeller(sellerId);
+  if (active >= MARKET_MAX_ACTIVE_LOTS) {
+    throw new AppError(ErrorCodes.MARKET_LOT_LIMIT, 409, 'Достигнут потолок активных лотов', {
+      limit: MARKET_MAX_ACTIVE_LOTS,
+      active
+    });
+  }
+
+  const lotId = deps.idFactory();
+  await deps.lots.insert(buildLot(listing, sellerId, lotId, now));
+
+  // Шаг 2: эскроу. Хлам уходит со склада продавца в лот.
+  const captured: { account: UserAccount; drafts: LedgerDraft[] }[] = [];
+  try {
+    const account = await deps.users.transact(sellerId, (current) => {
+      const escrow = escrowJunk(current, listing, lotId, { ts: now });
+      captured.push({ account: escrow.account, drafts: [escrow.draft] });
+      return escrow.account;
+    });
+    await commitDrafts(deps, captured[captured.length - 1]?.drafts ?? []);
+
+    // Шаг 3: витрина.
+    const lot = await deps.lots.transact(lotId, (current) => activateLot(current, now));
+    return { lot, account };
+  } catch (error) {
+    // Два разных отказа, и оба обязаны возвращать хлам, если он уже ушёл со склада:
+    //  - эскроу не состоялся  → лот-оболочка просто снимается;
+    //  - эскроу состоялся, а активация упала → лот снимается И хлам возвращается,
+    //    иначе чужой товар завис бы в `cancelled` без владельца.
+    // Доказательство списания — журнал, а не наша память о `captured`: при ретрое
+    // запроса память пуста, а запись в журнале на месте.
+    const escrowKey = makeIdempotencyKey('market', `${lotId}:escrow`);
+    try {
+      await deps.lots.transact(lotId, (current) => releaseLot(current, 'cancelled', now));
+      if (await deps.ledger.hasKey(escrowKey)) {
+        const shell = await deps.lots.findById(lotId);
+        if (shell) {
+          const restored = await deps.users.transact(sellerId, (current) => {
+            const back = returnJunk(current, shell, now, 'cancelled');
+            captured.push({ account: back.account, drafts: back.drafts });
+            return back.account;
+          });
+          await commitDrafts(deps, captured[captured.length - 1]?.drafts ?? []);
+          void restored;
+        }
+      }
+    } catch (cleanup) {
+      // Провал отката — не тихая потеря: лот остаётся `pending_escrow`/`cancelled`, и
+      // reconcile доведёт его по журналу. Звонок нужен, чтобы это было видно в логах.
+      deps.onError?.(cleanup instanceof Error ? cleanup : new Error(String(cleanup)), {
+        lotId,
+        sellerId,
+        stage: 'cancel_shell'
+      });
+    }
+    throw error;
+  }
+}
+
+// ─── Покупка ──────────────────────────────────────────────────────────────────
+
+export interface BuyResult {
+  lot: LotState;
+  buyer: UserAccount;
+  /** null — продавец ещё не получил деньги: их доводит reconcile по журналу. */
+  seller: UserAccount | null;
+  /** false — деньги у покупателя списались, но продавцу не доведены. */
+  settled: boolean;
+}
+
+/**
+ * Выкупить лот: захват (CAS) → деньги и товар покупателя → выплата продавцу.
+ *
+ * Дешёвые проверки (монета, потолок склада, «не свой лот») стоят ДО захвата
+ * намеренно: захват чужого по деньгам лота и последующий откат — лишняя запись
+ * в документе, вокруг которого толпятся другие покупатели. Отказать дешевле, чем
+ * заморозить и разморозить.
+ */
+export async function buyLot(
+  deps: MarketDeps,
+  buyerId: string,
+  lotId: string,
+  now: Date,
+  config: EconomyConfig
+): Promise<BuyResult> {
+  const buyer0 = await deps.users.findById(buyerId);
+  if (!buyer0) throw new AppError(ErrorCodes.NOT_FOUND, 404, 'Игрок не найден', { buyerId });
+  const listed = await deps.lots.findById(lotId);
+  if (!listed) throw notFound(`Лот ${lotId} не найден`);
+  if (listed.sellerId === buyerId) {
+    throw new AppError(ErrorCodes.MARKET_SELF_PURCHASE, 400, 'Нельзя выкупить собственный лот', { lotId });
+  }
+  if (listed.status !== 'listed') {
+    throw new AppError(ErrorCodes.MARKET_LOT_TAKEN, 409, 'Лот уже продан, снят или просрочен', {
+      lotId,
+      status: listed.status
+    });
+  }
+  if (Math.floor(buyer0.resources.sec) < listed.total) {
+    throw new AppError(ErrorCodes.INSUFFICIENT_FUNDS, 409, 'Недостаточно SEC для выкупа', {
+      currency: 'sec',
+      required: listed.total,
+      available: Math.floor(buyer0.resources.sec)
+    });
+  }
+  const junkCap = config.limits.loot.junkCap;
+  const held = junkTotal(buyer0.junk);
+  if (junkCap > 0 && held + listed.amount > junkCap) {
+    throw new AppError(ErrorCodes.JUNK_CAP_REACHED, 409, 'Склад хлама переполнен — освободите место до покупки', {
+      cap: junkCap,
+      current: held,
+      incoming: listed.amount
+    });
+  }
+
+  // Шаг 1: атомарный захват. Второй покупатель придёт в тот же редуктор и получит
+  // отказ, а не второе списание.
+  const claimed = await deps.lots.transact(lotId, (current) => claimLot(current, buyerId, now));
+
+  // Шаг 2: монета покупателя и товар ему.
+  const captured: LedgerDraft[][] = [];
+  let buyer: UserAccount;
+  try {
+    buyer = await deps.users.transact(buyerId, (current) => {
+      const side = settleBuyer(current, claimed, now, junkCap);
+      captured.push(side.drafts);
+      return side.account;
+    });
+    await commitDrafts(deps, captured[captured.length - 1] ?? []);
+  } catch (error) {
+    // Товар размораживается: иначе отказ по чужому переполненному складу навсегда
+    // снял бы лот с рынка. `unclaimLot` идемпотентен и CAS-повтору не вредит.
+    try {
+      await deps.lots.transact(lotId, (current) => unclaimLot(current, now));
+    } catch (cleanup) {
+      deps.onError?.(cleanup instanceof Error ? cleanup : new Error(String(cleanup)), {
+        lotId,
+        buyerId,
+        stage: 'unclaim'
+      });
+    }
+    throw error;
+  }
+
+  // Шаг 3: выплата продавцу за вычетом комиссии.
+  const net = lotNet(claimed);
+  try {
+    const payouts: LedgerDraft[][] = [];
+    const seller = await deps.users.transact(claimed.sellerId, (current) => {
+      const movement = paySeller(current, claimed, net, now);
+      payouts.push(movement.drafts);
+      return movement.account;
+    });
+    await commitDrafts(deps, payouts[payouts.length - 1] ?? []);
+    const lot = await deps.lots.transact(lotId, (current) => markPaid(current, now));
+    return { lot, buyer, seller, settled: true };
+  } catch (error) {
+    // Худший из допустимых исходов: покупатель заплатил, продавец не получил.
+    // Лот остаётся `sold` с `payoutSettled: false`, и reconcile доведёт деньги по
+    // записи `market:<lot>:sec` — именно поэтому захват делался до денег, а не после.
+    deps.onError?.(error instanceof Error ? error : new Error(String(error)), {
+      lotId,
+      buyerId,
+      sellerId: claimed.sellerId,
+      stage: 'payout'
+    });
+    return { lot: claimed, buyer, seller: null, settled: false };
+  }
+}
+
+// ─── Снятие лота продавцом ────────────────────────────────────────────────────
+
+/**
+ * Снять объявление: лот закрывается, хлам возвращается владельцу.
+ *
+ * Возврат идёт БЕЗ проверки потолка склада (см. `returnJunk`): игрок не виноват,
+ * что его товар залежался, а ящик тем временем забился рейдами. Потерять его —
+ * худший из исходов.
+ */
+export async function cancelLot(
+  deps: MarketDeps,
+  sellerId: string,
+  lotId: string,
+  now: Date
+): Promise<{ lot: LotState; account: UserAccount }> {
+  const found = await deps.lots.findById(lotId);
+  if (!found) throw notFound(`Лот ${lotId} не найден`);
+  if (found.sellerId !== sellerId) {
+    throw new AppError(ErrorCodes.FORBIDDEN, 403, 'Чужой лот нельзя снять', { lotId, sellerId });
+  }
+  if (found.status === 'sold') {
+    throw new AppError(ErrorCodes.MARKET_LOT_TAKEN, 409, 'Проданный лот нельзя снять', { lotId });
+  }
+
+  const released = await deps.lots.transact(lotId, (current) => releaseLot(current, 'cancelled', now));
+  const captured: LedgerDraft[][] = [];
+  const account = await deps.users.transact(sellerId, (current) => {
+    const back = returnJunk(current, released, now, 'cancelled');
+    captured.push(back.drafts);
+    return back.account;
+  });
+  await commitDrafts(deps, captured[captured.length - 1] ?? []);
+  return { lot: released, account };
+}
+
+// ─── Разбор зависших лотов ────────────────────────────────────────────────────
+
+export interface ReconcileResult {
+  /** Лоты, чей эскроу подтвердился журналом и которые вышли в витрину. */
+  activated: number;
+  /** Лоты, снятые как просроченные, с возвращённым продавцу хламом. */
+  expired: number;
+  /** Проданные лоты, по которым деньги наконец доведены продавцу. */
+  paidOut: number;
+}
+
+/**
+ * Доводит до конца прерванные операции рынка. Арбитр — журнал (`hasKey`), потому что
+ * статус документа знает только то, что мы про него думали в момент падения.
+ *
+ * Вызывается с чтения витрины (как `reconcileClan`): без фонового воркера это
+ * единственный момент, когда «завис» может честно превратиться в «сделано» или
+ * «отменено». Ограничение по `limit` держит цену запроса предсказуемой.
+ */
+export async function reconcileMarket(
+  deps: MarketDeps,
+  now: Date,
+  limit = MARKET_FEED_LIMIT
+): Promise<ReconcileResult> {
+  const result: ReconcileResult = { activated: 0, expired: 0, paidOut: 0 };
+
+  // 1. Лоты, вставленные, но не подтверждённые эскроу.
+  for (const lot of await deps.lots.listPendingEscrow(limit)) {
+    const escrowed = await deps.ledger.hasKey(makeIdempotencyKey('market', `${lot.id}:escrow`));
+    if (escrowed) {
+      await deps.lots.transact(lot.id, (current) => activateLot(current, now));
+      result.activated += 1;
+      continue;
+    }
+    // Списания нет — лот фиктивный, снимается. Хлам возвращать не нужно: его не списывали.
+    await deps.lots.transact(lot.id, (current) => releaseLot(current, 'cancelled', now));
+  }
+
+  // 2. Просроченные витринные лоты: товар возвращается владельцу.
+  for (const lot of await deps.lots.listExpired(now, limit)) {
+    const escrowed = await deps.ledger.hasKey(makeIdempotencyKey('market', `${lot.id}:escrow`));
+    const released = await deps.lots.transact(lot.id, (current) => releaseLot(current, 'expired', now));
+    if (!escrowed) continue;
+    const captured: LedgerDraft[][] = [];
+    await deps.users.transact(lot.sellerId, (current) => {
+      const back = returnJunk(current, released, now, 'expired');
+      captured.push(back.drafts);
+      return back.account;
+    });
+    await commitDrafts(deps, captured[captured.length - 1] ?? []);
+    result.expired += 1;
+  }
+
+  // 3. Проданные без выплаты: покупатель заплатил (доказательство в журнале) —
+  //    продавец должен получить.
+  for (const lot of await deps.lots.listUnpaidPayouts(limit)) {
+    const paid = await deps.ledger.hasKey(makeIdempotencyKey('market', `${lot.id}:sec`));
+    if (!paid) {
+      // Денег нет, а лот помечен проданным — значит падение было между захватом и
+      // списанием. Возвращаем лот в витрину: держать чужой товар захваченным
+      // бессмысленно.
+      await deps.lots.transact(lot.id, (current) => unclaimLot(current, now));
+      continue;
+    }
+    const net = lotNet(lot);
+    const captured: LedgerDraft[][] = [];
+    await deps.users.transact(lot.sellerId, (current) => {
+      const movement = paySeller(current, lot, net, now);
+      captured.push(movement.drafts);
+      return movement.account;
+    });
+    await commitDrafts(deps, captured[captured.length - 1] ?? []);
+    await deps.lots.transact(lot.id, (current) => markPaid(current, now));
+    result.paidOut += 1;
+  }
+
+  return result;
+}
+
