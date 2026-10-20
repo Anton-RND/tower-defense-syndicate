@@ -5,6 +5,7 @@ import { ErrorCodes } from '../src/lib/errors.js';
 import { MemoryLedgerStore } from '../src/modules/ledger/ledger.memory.js';
 import { makeIdempotencyKey } from '../src/modules/ledger/ledger.types.js';
 import { MemoryLotStore } from '../src/modules/market/lot.store.js';
+import { MemoryCommodityStore } from '../src/modules/market/commodity.store.js';
 import { lotTotal, type LotState } from '../src/modules/market/lot.types.js';
 import {
   buyLot,
@@ -50,6 +51,7 @@ async function harness() {
   return {
     users: new MemoryUserStore(),
     lots: new MemoryLotStore(),
+    commodities: new MemoryCommodityStore(),
     ledger: new MemoryLedgerStore(),
     idFactory
   };
@@ -273,9 +275,17 @@ describe('market.buy: три состояния сходятся, комисси
 });
 
 describe('market.reconcile: прерванная операция закрывается журналом, а не статусом', () => {
-  /** Черновик движения «как будто уже записан»: так выглядит падение между шагами. */
+  /**
+   * Запись движения «как будто уже записана»: так выглядит падение между шагами.
+   *
+   * Именно ЗАПИСЬ, а не черновик: `appendMany` принимает журнал фактов с `id`, и
+   * подсовывать ему черновик — то же самое, что писать в базу рынок без
+   * идентификаторов движения. Раньше тест так и делал, и это была та же дыра, что
+   * и в `commitDrafts`: тип `LedgerEntry` не давал её не заметить.
+   */
   function fakeDraft(userId: string, key: string, currency: string, delta: number, ts: Date) {
     return {
+      id: `entry-${key}`,
       userId,
       currency: currency as never,
       delta,

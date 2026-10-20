@@ -1,5 +1,5 @@
 import { notFound } from '../../lib/errors.js';
-import { cloneLot, isActiveLot, isExpired, isPendingEscrow, type LotState } from './lot.types.js';
+import { cloneLot, emptyJunkTotals, isActiveLot, isExpired, isPendingEscrow, type LotState } from './lot.types.js';
 import type { JunkId } from '../../config/workshop.js';
 
 /**
@@ -36,6 +36,20 @@ export interface LotStore {
 
   /** Сколько у продавца активных лотов (потолок `MARKET_MAX_ACTIVE_LOTS`). */
   countActiveBySeller(sellerId: string): Promise<number>;
+
+  /**
+   * Суммарное предложение по видам: сколько единиц каждого хлама сейчас лежит на
+   * рынке эскроу (P5).
+   *
+   * Отдельный метод, а не `listActive` с редуктором в вызывающем коде, по трём
+   * причинам. Первая: `listActive` ограничен `MARKET_FEED_LIMIT`, и считать объём
+   * рынка по первым 50 лотам значит пересчитывать коридор по витрине, а не по
+   * рынку — при 300 лотах рынок выглядел бы пустым и цены взлетели бы на ровном
+   * месте. Вторая: агрегат не таскает сотни документов через сеть ради шести
+   * чисел. Третья: вид с нулевым предложением обязан быть в ответе нулём, а не
+   * отсутствовать — «нет строки» и «ноль единиц» для коридора разные сигналы.
+   */
+  sumActiveUnits(): Promise<Record<JunkId, number>>;
 
   /** Просроченные, но ещё не возвращённые лоты. */
   listExpired(now: Date, limit: number): Promise<LotState[]>;
@@ -118,6 +132,12 @@ export class MemoryLotStore implements LotStore {
 
   async countActiveBySeller(sellerId: string): Promise<number> {
     return this.active().filter((lot) => lot.sellerId === sellerId).length;
+  }
+
+  async sumActiveUnits(): Promise<Record<JunkId, number>> {
+    const totals = emptyJunkTotals();
+    for (const lot of this.active()) totals[lot.junk] += lot.amount;
+    return totals;
   }
 
   async listExpired(now: Date, limit: number): Promise<LotState[]> {

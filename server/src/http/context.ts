@@ -15,6 +15,9 @@ import type { ClanStore } from '../modules/clan/clan.store.js';
 import { MemoryLotStore } from '../modules/market/lot.store.js';
 import { MongoLotStore } from '../modules/market/mongo.store.js';
 import type { LotStore } from '../modules/market/lot.store.js';
+import { MemoryCommodityStore } from '../modules/market/commodity.store.js';
+import { MongoCommodityStore } from '../modules/market/commodity.mongo.js';
+import type { CommodityStore } from '../modules/market/commodity.store.js';
 
 /**
  * Сборка зависимостей процесса: конфиг → сторы → журнал → токены → логгер.
@@ -36,6 +39,11 @@ export interface AppContext {
   readonly clans: ClanStore;
   /** Лоты чёрного рынка (Часть 2). Третья учётная сущность: не игрок и не клан. */
   readonly lots: LotStore;
+  /**
+   * Снапшоты товаров рынка (P5): четвёртая учётная сущность, шесть документов,
+   * живущих по закону «двигается только на чтении витрины».
+   */
+  readonly commodities: CommodityStore;
   readonly ledger: LedgerStore;
   readonly tokens: TokenService;
   readonly logger: Logger;
@@ -51,6 +59,7 @@ interface Stores {
   users: UserStore;
   clans: ClanStore;
   lots: LotStore;
+  commodities: CommodityStore;
   ledger: LedgerStore;
 }
 
@@ -63,6 +72,7 @@ function buildStores(config: AppConfig, logger: Logger): Stores {
       users: new MongoUserStore(uri, { logger }),
       clans: new MongoClanStore(uri, { logger }),
       lots: new MongoLotStore(uri, { logger }),
+      commodities: new MongoCommodityStore(uri, { logger }),
       ledger: new MongoLedgerStore(uri, { logger })
     };
   }
@@ -70,21 +80,30 @@ function buildStores(config: AppConfig, logger: Logger): Stores {
     users: new MemoryUserStore(),
     clans: new MemoryClanStore(),
     lots: new MemoryLotStore(),
+    commodities: new MemoryCommodityStore(),
     ledger: new MemoryLedgerStore()
   };
 }
 
 export function createContext(config: AppConfig = loadConfig(), overrides: Partial<AppContext> = {}): AppContext {
   const logger = overrides.logger ?? new Logger(config.logLevel);
-  const stores = overrides.users && overrides.ledger && overrides.clans && overrides.lots
-    ? { users: overrides.users, clans: overrides.clans, lots: overrides.lots, ledger: overrides.ledger }
-    : buildStores(config, logger);
+  const stores =
+    overrides.users && overrides.ledger && overrides.clans && overrides.lots && overrides.commodities
+      ? {
+          users: overrides.users,
+          clans: overrides.clans,
+          lots: overrides.lots,
+          commodities: overrides.commodities,
+          ledger: overrides.ledger
+        }
+      : buildStores(config, logger);
 
   const context: AppContext = {
     config,
     users: stores.users,
     clans: stores.clans,
     lots: stores.lots,
+    commodities: stores.commodities,
     ledger: stores.ledger,
     tokens:
       overrides.tokens ??
@@ -98,6 +117,7 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
         stores.users.connect(),
         stores.clans.connect(),
         stores.lots.connect(),
+        stores.commodities.connect(),
         stores.ledger.connect()
       ]);
     },
@@ -106,6 +126,7 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
         stores.users.disconnect(),
         stores.clans.disconnect(),
         stores.lots.disconnect(),
+        stores.commodities.disconnect(),
         stores.ledger.disconnect()
       ]);
     }

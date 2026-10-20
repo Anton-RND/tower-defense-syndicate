@@ -4,7 +4,8 @@ import {
   MARKET_MIN_LOT_UNITS,
   corridorOf,
   marketCommission,
-  priceWithinCorridor
+  priceWithinBounds,
+  type CorridorBounds
 } from '../../config/market.js';
 import { junkTotal, type JunkId } from '../../config/workshop.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
@@ -49,10 +50,24 @@ export interface CheckedListing {
  * рынка (`LotStore.countActiveBySeller`), а чистая функция их не видит — и любая
  * «проверка» на устаревшем снимке была бы декорацией. Считает commit.ts, у которого
  * есть стор, и на свежем значении.
+ *
+ * КОРИДОР ПРИХОДИТСЯ СНАРУЖИ (P5), а не читается из конфига. Границы теперь
+ * зависят от предложения, и единственный, кто знает текущие, — стор товаров.
+ * Чистая функция, полезшая бы в него сама, перестала бы быть чистой.
+ *
+ * НЕ ПЕРЕДАН — ЗНАЧИТ ЯКОРЬ. Фолбэк на статический коридор оставлен не для
+ * красоты: рынок без снапшота товара (первый запрос после поднятия базы) обязан
+ * принимать объявления, и вести он должен себя ровно так, как вёл себя до
+ * появления динамики. Молчаливый же фолбэк на «пустой рынок = потолок цен»
+ * отклонял бы первые объявления витрины, которой ещё нет.
  */
-export function checkListing(seller: UserAccount, input: ListingInput): CheckedListing {
-  const corridor = corridorOf(input.junk);
-  if (!corridor) {
+export function checkListing(
+  seller: UserAccount,
+  input: ListingInput,
+  corridor?: CorridorBounds
+): CheckedListing {
+  const bounds = corridor ?? corridorOf(input.junk);
+  if (!bounds) {
     throw new AppError(ErrorCodes.VALIDATION_ERROR, 400, 'Этот вид хлама на рынок не пускается', {
       junk: input.junk
     });
@@ -64,12 +79,12 @@ export function checkListing(seller: UserAccount, input: ListingInput): CheckedL
       max: MARKET_MAX_LOT_UNITS
     });
   }
-  if (!priceWithinCorridor(input.junk, input.pricePerUnit)) {
+  if (!priceWithinBounds(bounds, input.pricePerUnit)) {
     throw new AppError(ErrorCodes.MARKET_PRICE_OUT_OF_RANGE, 400, 'Цена за единицу вне коридора рынка', {
       junk: input.junk,
       pricePerUnit: input.pricePerUnit,
-      minPerUnit: corridor.minPerUnit,
-      maxPerUnit: corridor.maxPerUnit
+      minPerUnit: bounds.minPerUnit,
+      maxPerUnit: bounds.maxPerUnit
     });
   }
 

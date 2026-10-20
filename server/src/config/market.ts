@@ -55,16 +55,78 @@ export const MARKET_MIN_LOT_UNITS = 1;
 export interface Corridor {
   minPerUnit: number;
   maxPerUnit: number;
+  /**
+   * Эталонная ликвидность, единицы хлама этого вида на всём рынке.
+   *
+   * Это точка покоя динамики: при таком предложении множитель равен 1 и коридор
+   * совпадает со статическим. Задана отдельно для каждого вида, потому что «мало»
+   * для гильз и «мало» для двигателей — разные количества: гильз с боя приходит до
+   * 6 штук на уничтожение, двигателя — до одной (config/workshop.ts: LOOT_BASE).
+   * Один эталон на все виды сделал бы дешёвый массовый хлам вечно дефицитным,
+   * а редкий — вечно затоваренным.
+   */
+  referenceUnits: number;
 }
 
+/**
+ * Нижняя таблица — НЕ «текущие границы», а якорь. Динамика (market/economy.ts)
+ * двигает границы вокруг неё и ровно в её пределах: множитель 1 возвращает
+ * коридор точно сюда. Поэтому вид, у которого нет строки здесь, на рынок не
+ * пускается ни в каком состоянии рынка.
+ */
 export const MARKET_CORRIDORS: Readonly<Record<JunkId, Corridor>> = {
-  chips: { minPerUnit: 5, maxPerUnit: 200 },
-  boards: { minPerUnit: 10, maxPerUnit: 400 },
-  batteries: { minPerUnit: 4, maxPerUnit: 150 },
-  ammo_casings: { minPerUnit: 2, maxPerUnit: 80 },
-  transmissions: { minPerUnit: 20, maxPerUnit: 800 },
-  engines: { minPerUnit: 30, maxPerUnit: 1_200 }
+  chips: { minPerUnit: 5, maxPerUnit: 200, referenceUnits: 600 },
+  boards: { minPerUnit: 10, maxPerUnit: 400, referenceUnits: 800 },
+  batteries: { minPerUnit: 4, maxPerUnit: 150, referenceUnits: 500 },
+  ammo_casings: { minPerUnit: 2, maxPerUnit: 80, referenceUnits: 1500 },
+  transmissions: { minPerUnit: 20, maxPerUnit: 800, referenceUnits: 300 },
+  engines: { minPerUnit: 30, maxPerUnit: 1_200, referenceUnits: 250 }
 };
+
+/**
+ * Параметры динамики коридора (Часть 2, P5).
+ *
+ * ПОЧЕМУ СТЕПЕННАЯ КРИВАЯ, А НЕ ЛИНЕЙНАЯ ФОРМУЛА ИЗ ТЗ. ТЗ предлагало
+ * `2.5 − total/300`: линия, которая при нулевом предложении даёт 2.5, а при
+ * 750 единицах — ноль и уходит в отрицательные цены. Степень `r^(−elast)`
+ * ведёт себя иначе ровно там, где это важно: около эталона цена почти не
+ * двигается (рынок в покое), а на пустом рынке растёт неограниченно — то есть
+ * дефицит ощущается сильнее, чем в формуле ТЗ, и именно там, где игрок реально
+ * страдает. Эластичность 0.4 — половина типичной товарной: застой в 4 эталона
+ * удешевляет край коридора вдвое, голод вчетверо ниже эталона — удваивает.
+ *
+ * ПОЧЕМУ ГРАНИЦЫ ДВИГАЮТ ПОПРОЦЕНТНО, А НЕ МГНОВЕННО. Множитель считается по
+ * предложению, а предложение меняется от одного объявления: игрок выставляет
+ * 500 двигателей — и «мгновенная» динамика обрубила бы край коридора до пола
+ * ПЕРВОМУ же его лоту, то есть объявление ударило бы само по себе. Шаг ≤
+ * `maxMoveRatio` за пересчёт + `cooldownMs` между пересчётами дают то, чего
+ * ждёшь от живого рынка: цена ползёт, а не телепортируется, и за сутки хода
+ * сходятся к равновесию.
+ *
+ * ПОЧЕМУ ПОЛ И ПОТОЛОК МНОЖИТЕЛЯ ОТДЕЛЬНЫЕ. Пол 0.5 держит рынок выше
+ * произвола: ниже половины якоря хлам выгоднее сжигать в цехе, и витрина
+ * превратилась бы в помойку. Потолок 2.25 не даёт пустому рынку назначить цену,
+ * за которую ничего не купят, — «дефицит» без покупателя это не экономика, а
+ * витрина с одной карточкой.
+ */
+export const MARKET_PRICE_DYNAMICS = {
+  /** Крутизна кривой спроса: 0 — коридор вечен, 1 — цена обратно пропорциональна рынку. */
+  elasticity: 0.4,
+  /** Нижняя граница множителя: не больше половины якоря. */
+  factorFloor: 0.5,
+  /** Верхняя граница множителя: не больше 2,25 якоря. */
+  factorCeil: 2.25,
+  /** Потолок движения края коридора за один пересчёт (долями от текущего значения). */
+  maxMoveRatio: 0.25,
+  /** Пауза между пересчётами одного вида: быстрее этого рынка не двигается. */
+  cooldownMs: 10 * 60_000
+} as const;
+
+/** Границы коридора без эталона: то, что видит игрок и что проверяет листинг. */
+export interface CorridorBounds {
+  minPerUnit: number;
+  maxPerUnit: number;
+}
 
 /** Сколько активных лотов рынка держит витрина одного запроса. */
 export const MARKET_FEED_LIMIT = 50;
@@ -86,9 +148,73 @@ export function marketCommission(total: number): number {
   return Math.floor(total * MARKET_COMMISSION);
 }
 
-/** Цена за единицу проходит свой коридор? */
+/** Цена за единицу проходит СВОЙ (текущий) коридор? */
 export function priceWithinCorridor(id: string, perUnit: number): boolean {
   const corridor = corridorOf(id);
   if (!corridor) return false;
-  return Number.isInteger(perUnit) && perUnit >= corridor.minPerUnit && perUnit <= corridor.maxPerUnit;
+  return priceWithinBounds(corridor, perUnit);
+}
+
+/** Та же проверка для готовых границ: у витринного снапшота нет права на `undefined`. */
+export function priceWithinBounds(bounds: CorridorBounds, perUnit: number): boolean {
+  return Number.isInteger(perUnit) && perUnit >= bounds.minPerUnit && perUnit <= bounds.maxPerUnit;
+}
+
+/**
+ * Множитель дефицита: `(supply/эталон)^(−elast)`, зажатый в [пол, потолок].
+ *
+ * ЧИСТО ФУНКЦИЯ ОТ ПРЕДЛОЖЕНИЯ, а не от истории. Это сознательный отказ от
+ * «плавно помню прошлое значение» в пользу воспроизводимости: по одному и тому же
+ * снимку рынка любой узел и любой повтор расчёта дают один и тот же множитель, и
+ * спорить о том, «какой рынок был минуту назад», некому.
+ *
+ * supply = 0 даёт `0^(−elast)` = ∞, что зажимается потолком: пустой рынок — это
+ * максимум дефицита, а не деление на ноль. Отрицательное предложение невозможно,
+ * но `Math.max(0, …)` держит формулу живучей к мусору в сторе.
+ */
+export function scarcityFactorOf(supply: number, referenceUnits: number): number {
+  if (!Number.isFinite(supply) || !Number.isFinite(referenceUnits) || referenceUnits <= 0) return 1;
+  const ratio = Math.max(0, supply) / referenceUnits;
+  const raw = ratio === 0 ? Number.POSITIVE_INFINITY : Math.pow(ratio, -MARKET_PRICE_DYNAMICS.elasticity);
+  return Math.min(MARKET_PRICE_DYNAMICS.factorCeil, Math.max(MARKET_PRICE_DYNAMICS.factorFloor, raw));
+}
+
+/**
+ * Границы якорного коридора под данным множителем.
+ *
+ * Оба края умножаются на ОДИН множитель: ширина коридора (×40 у всех видов) — это
+ * про «разброс оценок между игроками», а не про уровень цен. Двигать её означало
+ * бы, что при дефиците игроки остаются без общего языка, а при затоваривании —
+ * что верхний край падает ниже чужого нижнего и витрина становится лесенкой
+ * отказа.
+ *
+ * Округление — до целых монет, и `maxPerUnit` никогда не опускается ниже
+ * `minPerUnit`: вырожденный коридор [5, 4] отклонил бы любое объявление.
+ */
+export function corridorAt(id: string, factor: number): CorridorBounds | undefined {
+  const corridor = corridorOf(id);
+  if (!corridor) return undefined;
+  const f = Number.isFinite(factor) && factor > 0 ? factor : 1;
+  const minPerUnit = Math.max(1, Math.round(corridor.minPerUnit * f));
+  const maxPerUnit = Math.max(minPerUnit, Math.round(corridor.maxPerUnit * f));
+  return { minPerUnit, maxPerUnit };
+}
+
+/**
+ * Абсолютные пределы, за которые динамике выходить запрещено: [якорь × пол,
+ * якорь × потолок]. Нужны витрине, чтобы показать игроку «дальше этого не уедет
+ * никогда», и тестам, чтобы проверять инвариант, не зная внутренней формулы.
+ */
+export function hardBoundsOf(id: string): CorridorBounds | undefined {
+  const corridor = corridorOf(id);
+  if (!corridor) return undefined;
+  const minPerUnit = Math.max(
+    1,
+    Math.round(corridor.minPerUnit * MARKET_PRICE_DYNAMICS.factorFloor)
+  );
+  const maxPerUnit = Math.max(
+    minPerUnit,
+    Math.round(corridor.maxPerUnit * MARKET_PRICE_DYNAMICS.factorCeil)
+  );
+  return { minPerUnit, maxPerUnit };
 }

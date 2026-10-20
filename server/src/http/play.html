@@ -2453,9 +2453,30 @@ function renderMarket() {
   }
   const market = S.market.market;
   const rules = S.market.rules;
-  const junkOptions = (rules.corridors || []).map((c) =>
-    '<option value="' + esc(c.junk) + '">' + esc(c.junk) + ' · ' + c.minPerUnit + '–' + c.maxPerUnit + ' SEC/шт</option>'
-  ).join('');
+  // Коридор теперь живой: границы зависят от предложения на всём рынке. Старая
+  // форма (`c.minPerUnit`) оставлена как фолбэк на случай витрины без снапшотов.
+  const corridors = rules.corridors || [];
+  const junkOptions = corridors.map((c) => {
+    const live = c.corridor || { minPerUnit: c.minPerUnit, maxPerUnit: c.maxPerUnit };
+    return '<option value="' + esc(c.junk) + '">' + esc(c.junk) + ' · ' + live.minPerUnit + '–' + live.maxPerUnit + ' SEC/шт</option>';
+  }).join('');
+
+  // Состояние рынка по виду — не украшение: без него игрок видит новую цену и не
+  // видит причины, а причина здесь ровно одна и названа ему же.
+  const corridorRows = corridors.map((c) => {
+    const live = c.corridor || { minPerUnit: c.minPerUnit, maxPerUnit: c.maxPerUnit };
+    const scarcity = c.scarcity || 0;
+    const state = scarcity > 0.15
+      ? '<span class="err">дефицит</span>'
+      : scarcity < -0.15
+        ? '<span class="muted">затоварен</span>'
+        : '<span class="ok">покой</span>';
+    return row(
+      esc(c.junk),
+      live.minPerUnit + '–' + live.maxPerUnit + ' SEC/шт · ' + state +
+        ' · ' + fmtNum(c.supply || 0) + '/' + fmtNum(c.referenceUnits || 0) + ' шт'
+    );
+  }).join('');
 
   const feed = (market.lots || []).map((lot) =>
     '<tr><td>' + esc(lot.junk) + ' <span class="muted">' + fmtNum(lot.amount) + ' шт · ' + esc(lot.seller) + '</span></td>' +
@@ -2490,8 +2511,16 @@ function renderMarket() {
     '<input type="number" id="mktPrice" value="50" min="1" style="width:70px" placeholder="SEC/шт">' +
     '<button onclick="TD.marketSell()">выставить</button></div>' +
     '<p class="hint">Хлам при выставлении уходит в эскроу сразу: объявление без товара физически невозможно. ' +
-    'Комиссия рынка ' + Math.round(rules.commission * 100) + '% сгорания при продаже — монета из обращения ' +
-    'уходит, а не переходит другому игроку. Срок лота ' + fmtMs(rules.lotTtlMs) + ', потом хлам возвращается.</p>';
+    'Комиссия рынка ' + Math.round(rules.commission * 100) + '% сгорается при продаже — монета из обращения ' +
+    'уходит, а не переходит другому игроку. Срок лота ' + fmtMs(rules.lotTtlMs) + ', потом хлам возвращается.</p>' +
+    (corridorRows
+      ? '<table style="margin-top:6px"><tr><th>коридор цен</th><th>границы, состояние и предложение</th></tr>' +
+          corridorRows + '</table>' +
+          '<p class="hint">Границы двигаются по дефициту: мало хлама на всём сервере — дороже, завал — дешевле. ' +
+          'Ход медленный и идёт только когда рынок открывают, так что крупное объявление не обрубает ' +
+          'коридор под самим собой. Выставленный лот свою цену сохраняет всегда: новые границы касаются ' +
+          'только новых объявлений, иначе рынок задним числом отменил бы вашу сделку.</p>'
+      : '');
 }
 
 function renderPvp() {

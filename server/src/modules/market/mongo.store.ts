@@ -4,10 +4,11 @@ import { createConnection, type Connection } from 'mongoose';
 
 import { notFound } from '../../lib/errors.js';
 import { Logger, type LogLevel } from '../../lib/logger.js';
-import { cloneLot, isExpired, isPendingEscrow, type LotState } from './lot.types.js';
+import { cloneLot, emptyJunkTotals, isExpired, isPendingEscrow, type LotState } from './lot.types.js';
 import { createLotModel, toLot, toLotSetPayload, type LotDoc, type LotModel } from './mongo.model.js';
 import { LotConflictError, MAX_LOT_TRANSACT_ATTEMPTS, type LotStore } from './lot.store.js';
 import type { JunkId } from '../../config/workshop.js';
+import { isJunkId } from '../../config/workshop.js';
 
 /**
  * Mongo-стор лотов. Тот же контракт, что у `MongoClanStore` и `MongoUserStore`:
@@ -121,6 +122,31 @@ export class MongoLotStore implements LotStore {
 
   async countActiveBySeller(sellerId: string): Promise<number> {
     return this.db.countDocuments({ sellerId, status: 'listed' }).exec();
+  }
+
+  /**
+   * Агрегат `$group`, а не выборка лотов: счёт идёт по ВСЕМ активным лотам, а не по
+   * витринным 50 (см. контракт `LotStore.sumActiveUnits`).
+   *
+   * `$match` по `status` первым шагом — это использование `idx_lot_feed`
+   * ({ status, pricePerUnit, createdAt }) как покрывающего префикса: mongo отбирает
+   * витринные документы индексом, а не полным сбором коллекции, которая растёт с
+   * историей торгов. Без этого пересчёт коридора на каждом чтении витрины стал бы
+   * самым дорогим запросом в проекте.
+   */
+  async sumActiveUnits(): Promise<Record<JunkId, number>> {
+    const rows = await this.db
+      .aggregate<{ _id: string; units: number }>([
+        { $match: { status: 'listed' } },
+        { $group: { _id: '$junk', units: { $sum: '$amount' } } }
+      ])
+      .exec();
+
+    const totals = emptyJunkTotals();
+    for (const row of rows) {
+      if (isJunkId(row._id)) totals[row._id] = Math.max(0, Math.trunc(row.units) || 0);
+    }
+    return totals;
   }
 
   async listExpired(now: Date, limit: number): Promise<LotState[]> {

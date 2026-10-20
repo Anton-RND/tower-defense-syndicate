@@ -8,6 +8,9 @@ import type { UserAccount } from '../user/user.types.js';
 import type { UserStore } from '../user/user.store.js';
 import type { LotState } from './lot.types.js';
 import type { LotStore } from './lot.store.js';
+import type { CommodityStore } from './commodity.store.js';
+import { commodityBounds } from './commodity.types.js';
+import { commodityForListing } from './economy.js';
 import {
   activateLot,
   buildLot,
@@ -48,14 +51,36 @@ export interface MarketDeps {
   users: UserStore;
   lots: LotStore;
   ledger: LedgerStore;
+  /**
+   * Снапшоты товаров (P5). Листинг проверяет цену по ТЕКУЩЕМУ коридору, и этот
+   * коридор — данные стора, а не константа конфига.
+   *
+   * Поле обязательное, а не опциональное: опциональное означало бы, что
+   * `listLot` умеет работать и без него, и где-нибудь в тесте или в новом хаб-е
+   * тихо включился бы якорный коридор вместо рыночного. Ошибка «нет стора» на
+   * сборке контекста дешевле, чем рынок, принимающий объявления вне своих границ.
+   */
+  commodities: CommodityStore;
   idFactory: () => string;
   /** Звонок провала компенсационного шага: сигнал для фоновой помощи, а не тихая потеря. */
   onError?: (error: Error, context: Record<string, unknown>) => void;
 }
 
+/**
+ * Фиксация движений журнала.
+ *
+ * Черновик (`LedgerDraft`) — это движение БЕЗ `id`: его порождает чистый домен,
+ * который не знает ни про какое хранилище. Запись (`LedgerEntry`) — движение с
+ * `id`, и присваивает его ХАБ, владеющий `idFactory`. Тот же порядок, что в
+ * clan/commit.ts и http/helpers.ts.
+ *
+ * Присваивать `id` здесь, а не в домене, — не формальность: `id` записи — часть её
+ * первичного ключа в Mongo, и домен, генерирующий его сам, перестал бы быть
+ * чистым и стал бы невоспроизводимым в тестах.
+ */
 async function commitDrafts(deps: MarketDeps, drafts: LedgerDraft[]): Promise<void> {
   if (drafts.length === 0) return;
-  await deps.ledger.appendMany(drafts);
+  await deps.ledger.appendMany(drafts.map((draft) => ({ ...draft, id: deps.idFactory() })));
 }
 
 function notFound(message: string): AppError {
@@ -81,7 +106,12 @@ export async function listLot(
 
   // Дешёвые проверки до вставки: занять слот рынка мусорным объявлением — значит
   // отобрать его у того, кто реально готов торговать.
-  const listing = checkListing(fresh, input);
+  //
+  // Коридор берётся ПОСЛЕДНИМ зафиксированным, а не пересчитанным прямо сейчас
+  // (почему — шапка economy.ts): цена, которую игрок увидел в витрине, и цена, по
+  // которой его объявление пропускается, должны быть одной и той же границей.
+  const commodity = await commodityForListing(deps, input.junk, now);
+  const listing = checkListing(fresh, input, commodityBounds(commodity));
   const active = await deps.lots.countActiveBySeller(sellerId);
   if (active >= MARKET_MAX_ACTIVE_LOTS) {
     throw new AppError(ErrorCodes.MARKET_LOT_LIMIT, 409, 'Достигнут потолок активных лотов', {

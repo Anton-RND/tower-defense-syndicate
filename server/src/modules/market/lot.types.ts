@@ -1,4 +1,4 @@
-import { isJunkId, junkTotal, type JunkId } from '../../config/workshop.js';
+import { isJunkId, junkTotal, JUNK_IDS, type JunkId } from '../../config/workshop.js';
 
 /**
  * Состояние лота (Часть 2, чёрный рынок).
@@ -96,3 +96,18 @@ export function isLotJunkId(value: string): value is JunkId {
 export function junkUnitsOf(account: { junk: Record<JunkId, number> }): number {
   return junkTotal(account.junk);
 }
+
+/**
+ * Карта предложения, заполненная нулями по всем шести видам.
+ *
+ * Заполненная, а не пустая: `sumActiveUnits` обязан отличать «этого хлама на рынке
+ * нет» (0 → максимум дефицита, коридор едет вверх) от «мы не спросили» (undefined
+ * → пересчёт падает или, что хуже, молча принимает 1). Нули — единственная форма,
+ * при которой отсутствие лотов вида остаётся экономическим сигналом.
+ */
+export function emptyJunkTotals(): Record<JunkId, number> {
+  const totals = {} as Record<JunkId, number>;
+  for (const id of JUNK_IDS) totals[id] = 0;
+  return totals;
+}
+

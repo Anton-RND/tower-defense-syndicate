@@ -558,6 +558,36 @@ async function main() {
   if (typeof marketBefore.rules?.commission !== 'number') fail('market.rules.commission отсутствует — UI не знает комиссию до продажи');
   if (!Array.isArray(marketBefore.market?.corridors ?? marketBefore.rules?.corridors)) fail('у рынка нет коридоров цен — витрина не знает границ');
 
+  // P5: коридор живой. Смоук проверяет не формулу (она покрыта юнит-тестами), а то,
+  // что HTTP-контракт его наружу отдаёт и что листинг слушается именно его.
+  const liveChips = (marketBefore.rules?.corridors || []).find((c) => c.junk === 'chips');
+  if (!liveChips?.corridor?.minPerUnit || !liveChips?.corridor?.maxPerUnit) {
+    fail('витрина не отдаёт живой коридор чипов — UI серит границы по догадке');
+  }
+  if (!(marketBefore.rules?.dynamics?.cooldownMs > 0)) fail('нет параметров динамики цены — игрок не знает, как часто двигаются границы');
+  if (!(liveChips?.referenceUnits > 0)) fail('у коридора нет эталона ликвидности — цена без причины');
+  const depthChips = (marketBefore.market?.depth || []).find((d) => d.junk === 'chips');
+  if (depthChips && typeof depthChips.scarcity !== 'number') fail('глубина рынка не отдаёт индекс дефицита');
+  if (liveChips) {
+    // Граница берётся из ответа, а не из конфига: смысл проверки в том, что листинг
+    // слушается ТОГО коридора, который игрок видит прямо сейчас, а не того, что
+    // когда-то был записан в config/market.ts.
+    await expectRefusal(
+      'цена ниже живого коридора',
+      'POST',
+      '/v1/market/lots',
+      { junk: 'chips', amount: 5, pricePerUnit: liveChips.corridor.minPerUnit - 1 },
+      'MARKET_PRICE_OUT_OF_RANGE'
+    );
+    await expectRefusal(
+      'цена выше живого коридора',
+      'POST',
+      '/v1/market/lots',
+      { junk: 'chips', amount: 5, pricePerUnit: liveChips.corridor.maxPerUnit + 1 },
+      'MARKET_PRICE_OUT_OF_RANGE'
+    );
+  }
+
   const sell = await step('выставить 20 чипов по 50 SEC', 'POST', '/v1/market/lots', { junk: 'chips', amount: 20, pricePerUnit: 50 });
   const soldLot = sell.result?.lot;
   if (!soldLot || soldLot.status !== 'listed') fail('лот не вышел в витрину после выставления');

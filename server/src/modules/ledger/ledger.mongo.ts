@@ -79,16 +79,30 @@ export class MongoLedgerStore implements LedgerStore {
     } catch (error) {
       // Дубль ключа — штатный исход ретрая клиента или повторного вебхука, а не авария:
       // деньги УЖЕ списаны транзакцией аккаунта, и 500 отсюда только заглушил бы след.
-      // Всё остальное (сеть, схема) обязан поднять наружу, а не прятать за «частичной
-      // записью» — иначе half-write станет нормой.
-      const writeErrors = (error as { writeErrors?: Array<{ code?: number }> } | null)?.writeErrors ?? [];
-      const duplicates = writeErrors.filter((item) => item.code === 11000).length;
-      if (duplicates === 0 || duplicates !== writeErrors.length) throw error;
-      this.logger.debug('Дубли движений журнала проигнорированы', {
-        duplicates,
-        attempted: entries.length
+      //
+      // ФОРМУ ОШИБКИ ЗДЕСЬ РАЗБИРАТЬ НЕЛЬЗЯ, и это не аккуратность, а опыт: проверка
+      // `error.writeErrors` жила здесь ровно до того момента, как драйвер 7.x начал
+      // отдавать `MongoBulkWriteError` с вложенным `result`, и каждая пачка с дублем
+      // стала бросать наружу — то есть повтор клиента на рынке давал 500 вместо
+      // «ноль новых записей». Вместо третьего варианта разбора — путь, который не
+      // зависит от внутренностей драйвера вовсе: повторить по одному через `append`,
+      // ловящий 11000 точечно.
+      //
+      // Цена — N круговых запросов вместо одного бачка, и платим мы её ТОЛЬКО на
+      // провальной ветке. Пачки у нас по 1–4 движения, так что «дорого» здесь —
+      // четыре запроса вместо одного, против 500 на глазах у игрока.
+      //
+      // Настоящая авария (сеть, схема) при этом не прячется: первый же повторный
+      // `append` бросит её наружу ровно так, как бросила бы прежняя ветка.
+      void error;
+      let inserted = 0;
+      for (const entry of entries) if (await this.append(entry)) inserted += 1;
+      this.logger.debug('Пачка движений журнала перечитана по одному', {
+        attempted: entries.length,
+        inserted,
+        reason: (error as Error).message
       });
-      return entries.length - duplicates;
+      return inserted;
     }
   }
 
