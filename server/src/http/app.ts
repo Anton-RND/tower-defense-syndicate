@@ -10,6 +10,7 @@ import { loadDebugPage } from './debugPage.js';
 import { loadPlayPage } from './playPage.js';
 import { registerAdsRoutes } from './routes/adsRoutes.js';
 import { registerAuthRoutes } from './routes/authRoutes.js';
+import { registerClanRoutes } from './routes/clanRoutes.js';
 import { registerDevRoutes } from './routes/devRoutes.js';
 import { registerEconomyRoutes } from './routes/economyRoutes.js';
 import { registerMaterialsRoutes } from './routes/materialsRoutes.js';
@@ -115,6 +116,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   registerShopRoutes(app, ctx);
   registerAdsRoutes(app, ctx);
   registerPvpRoutes(app, ctx);
+  registerClanRoutes(app, ctx);
   registerDevRoutes(app, ctx);
 
   return app;

@@ -6,7 +6,7 @@ import { makeIdempotencyKey, type LedgerEntry } from '../ledger/ledger.types.js'
 import type { LedgerStore } from '../ledger/ledger.store.js';
 import type { UserAccount } from '../user/user.types.js';
 import type { UserStore } from '../user/user.store.js';
-import { isMember, type ClanContribution, type ClanState } from './clan.types.js';
+import { isMember, normalizeClanName, type ClanContribution, type ClanState } from './clan.types.js';
 import { DuplicateClanNameError, type ClanStore } from './clan.store.js';
 import {
   buildClanShell,
@@ -21,6 +21,7 @@ import {
   pruneContributions,
   settleClanCreation,
   settleContribution,
+  transferLeadership,
   voidClan,
   voidContribution,
   type DepositInput
@@ -359,4 +360,48 @@ export async function disbandCurrentClan(
   const clan = await deps.clans.transact(clanId, (current) => disbandClan(current, userId, reason, now));
   await deps.users.transact(userId, (current) => ({ ...current, clanId: null }));
   return clan;
+}
+
+/**
+ * Вступление по имени: тот же протокол, что `joinClanById`, но с поиском клана.
+ *
+ * Имя, а не id, — потому что игрок знает название клана друга, а не его UUID.
+ * Поиск идёт по КАНОНИЧЕСКОЙ форме (`normalizeClanName`), иначе «Сталь » и «сталь»
+ * были бы двумя разными кланами для клиента и одним для индекса.
+ *
+ * Гонка «пока искали, расформировали» здесь норма: `joinClan` внутри редуктора
+ * отказывает по `status === 'void'` на СВЕЖЕМ документе, поэтому протухший результат
+ * поиска не превращается в вступление в мёртвый клан.
+ */
+export async function joinClanByName(
+  deps: ClanDeps,
+  userId: string,
+  name: string,
+  now: Date
+): Promise<{ clan: ClanState; account: UserAccount }> {
+  const canonical = normalizeClanName(name);
+  const clan = await deps.clans.findByName(canonical);
+  if (!clan || clan.status === 'void') {
+    throw new AppError(ErrorCodes.CLAN_NOT_FOUND, 404, 'Клан не найден', { name: canonical });
+  }
+  return joinClanById(deps, userId, clan.id, now);
+}
+
+/**
+ * Передача управления. Клан обновляется единственный раз: `leaderId` живёт только
+ * в документе клана, и в отличие от основания или взноса эта операция не трогает
+ * документ игрока — значит второй транзакции нет и разбирать нечего.
+ */
+export async function transferLeadershipTo(
+  deps: ClanDeps,
+  fromUserId: string,
+  toUserId: string,
+  now: Date
+): Promise<ClanState> {
+  const account = await deps.users.findById(fromUserId);
+  if (!account) throw new AppError(ErrorCodes.NOT_FOUND, 404, 'Игрок не найден', { userId: fromUserId });
+  if (!account.clanId) throw new AppError(ErrorCodes.NOT_IN_CLAN, 409, 'Вы не состоите в клане');
+
+  const clanId = account.clanId;
+  return deps.clans.transact(clanId, (current) => transferLeadership(current, fromUserId, toUserId, now));
 }

@@ -127,6 +127,7 @@
     <div class="panel"><h2>Энергосеть <span class="tag" id="pwrTag">&mdash;</span></h2><div id="pwrBody" class="muted">&mdash;</div></div>
     <div class="panel"><h2>Оборона <span class="tag" id="defTag">&mdash;</span></h2><div id="defBody">&mdash;</div></div>
     <div class="panel"><h2>PvP <span class="tag" id="pvpTag">&mdash;</span></h2><div id="pvpBody">&mdash;</div></div>
+    <div class="panel"><h2>Клан <span class="tag" id="clanTag">&mdash;</span></h2><div id="clanBody">&mdash;</div></div>
     <div class="panel"><h2>Журнал</h2><div id="log"></div></div>
   </aside>
 </main>
@@ -271,9 +272,26 @@ async function refresh() {
   try {
     await api('GET', '/v1/economy');
     if (!S.blueprints) await loadBlueprints();
+    await loadClan();
     renderAll();
   } catch (error) {
     log('обновление: ' + error.message, 'err');
+  }
+}
+
+/**
+ * Витрина клана. Отдельный запрос, потому что `/v1/economy` — про площадку игрока,
+ * а членство и казна живут в чужом документе и ходят через другой протокол записи.
+ *
+ * Неудача здесь НЕ валит остальную страницу: без клана игрок обязан видеть завод и
+ * сеть, иначе отказ одного модуля превращается в отказ всего интерфейса.
+ */
+async function loadClan() {
+  try {
+    S.clan = await api('GET', '/v1/clan');
+  } catch (error) {
+    S.clan = null;
+    log('клан: ' + error.message, 'err');
   }
 }
 
@@ -2281,12 +2299,19 @@ function renderPower() {
     '<td class="num">' + r.online + '/' + r.instances + '</td>' +
     '<td class="num">' + (r.reason ? bad(WHY[r.reason] || r.reason) : ok('в строю')) + '</td></tr>').join('');
 
+  // Колонка «SEC» — цена СЛЕДУЮЩЕГО экземпляра (витрина считает её с ростом).
+  // Подсвечиваем красным только когда монеты реально не хватает: сама по себе цена
+  // не ошибка, а «строить» с серым прайсом было бы обманом — игрок нажал бы и получил
+  // INSUFFICIENT_FUNDS от сервера, который всегда вправе отказать.
+  const secWallet = eco.resources.secSpendable;
   const buildings = (eco.structures || []).map((s) =>
     '<tr><td>' + esc(s.name) + ' <span class="muted">T' + s.tier + '</span>' +
     (s.unlocked ? '' : ' <span class="err" title="не выполнен предшественник">🔒</span>') + '</td>' +
     '<td class="num">' + s.count + '</td>' +
     '<td class="num muted">' + (s.power >= 0 ? '+' : '') + fmtNum(s.power) + '</td>' +
     '<td class="num muted">' + fmtNum(s.heat) + '</td>' +
+    '<td class="num' + (s.secCost > secWallet ? ' err' : '') + '" title="цена следующего экземпляра">' +
+    (s.secCost > 0 ? fmtNum(s.secCost) : '—') + '</td>' +
     '<td class="num"><button' + (s.unlocked ? '' : ' disabled') +
     ' onclick="TD.buildStructure(\'' + s.id + '\')">строить</button></td></tr>').join('');
 
@@ -2302,7 +2327,7 @@ function renderPower() {
     (nodes
       ? '<table><tr><th>узел</th><th class="num">онлайн</th><th class="num">причина</th></tr>' + nodes + '</table>'
       : '<div class="muted" style="margin:6px 0">сеть пуста: постройте плазменный конвертер</div>') +
-    '<table><tr><th>сооружение</th><th class="num">шт</th><th class="num">кВт</th><th class="num">тепло</th><th class="num"></th></tr>' +
+    '<table><tr><th>сооружение</th><th class="num">шт</th><th class="num">кВт</th><th class="num">тепло</th><th class="num">SEC</th><th class="num"></th></tr>' +
     buildings + '</table>' +
     '<p class="hint">Веер бинарный: стойка либо стоит, либо глуха — никакого «работает на 73%». ' +
     'Глухая башня остаётся на карте и принимает урон, но не стреляет; тяжёлая техника ' +
@@ -2329,6 +2354,79 @@ function renderDefense() {
 }
 
 // ─── PvP ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Панель клана.
+ *
+ * Как и везде на этом стенде, фронт не считает баланс сам: «нужно ещё 120 астерия»
+ * рисуется из `membership.canCreate`/`membership.reason`, которые сервер вывел
+ * ДО ответа (см. describeClanMembership), а не из сравнения двух чисел на клиенте.
+ * Причина та же, что у цен сооружений: расхождение витрины и касы — это жалоба
+ * в поддержку, а не косметика.
+ */
+function renderClan() {
+  const tag = $('clanTag');
+  const body = $('clanBody');
+  if (!S.clan) {
+    tag.innerHTML = '&mdash;';
+    body.innerHTML = '<span class="muted">витрина клана не загружена</span>';
+    return;
+  }
+  const membership = S.clan.membership;
+  const rules = S.clan.rules;
+  const clan = membership.clan;
+
+  if (!clan) {
+    const WHY = { ok: '', member: 'вы уже в клане', funds: 'не хватает астерия', debt: 'долг по донату' };
+    tag.innerHTML = membership.canCreate ? '<span class="ok">готов основать</span>' : (WHY[membership.reason] || 'нет клана');
+    body.innerHTML =
+      '<table>' +
+      row('стоимость основания', fmtNum(rules.createCost) + ' астерия') +
+      row('у вас', fmtNum(membership.asterium) +
+        (membership.canCreate ? '' : ' · ' + bad('нужно ещё ' + fmtNum(Math.max(0, rules.createCost - membership.asterium))))) +
+      row('имя', rules.name.min + '–' + rules.name.max + ' символов · тег ' + rules.tag.min + '–' + rules.tag.max) +
+      '</table>' +
+      '<div class="row" style="margin-top:6px"><input type="text" id="clanName" placeholder="имя клана" maxlength="' + rules.name.max + '">' +
+      '<input type="text" id="clanTagInput" placeholder="тег" maxlength="' + rules.tag.max + '">' +
+      '<button' + (membership.canCreate ? '' : ' disabled') + ' onclick="TD.clanCreate()">основать</button></div>' +
+      '<div class="row" style="margin-top:6px"><input type="text" id="clanJoinName" placeholder="имя клана для вступления">' +
+      '<button onclick="TD.clanJoin()">вступить</button></div>' +
+      '<p class="hint">Астерий списывается сразу, клан активируется только после подтверждения списания журналом. ' +
+      'Если процесс упадёт между шагами, клан останется в «ожидает оплату» и разберётся при следующем чтении.</p>';
+    return;
+  }
+
+  const mine = S.clan.mine;
+  const fill = rules.treasuryCap > 0 ? Math.min(1, clan.treasuryUnits / rules.treasuryCap) : 0;
+  const leader = clan.leaderId === (S.snap && S.snap.user ? S.snap.user.id : '');
+  tag.innerHTML = esc(clan.tag) + ' · ' + clan.members + '/' + clan.limit;
+  body.innerHTML =
+    '<table>' +
+    row('клан', esc(clan.name) + (clan.status === 'active' ? '' : ' ' + bad(clan.status === 'void' ? 'расформирован' : 'ожидает оплату'))) +
+    row('казна', fmtNum(clan.treasuryUnits) + ' ед. (' + Math.round(fill * 100) + '% от ' + fmtNum(rules.treasuryCap) + ')') +
+    METAL_ROWS(clan.treasury) +
+    row('в обработке', clan.pending ? bad(clan.pending + ' взнос(ов) ждут подтверждения') : ok('пусто')) +
+    (mine
+      ? row('моё сегодня', mine.count + '/' + mine.dailyDeposits + ' взносов · ' + fmtNum(mine.units) + '/' + fmtNum(mine.dailyUnits) + ' ед.')
+      : '') +
+    '</table>' +
+    '<div class="row" style="margin-top:6px">' +
+    '<select id="clanMetal">' + (rules.metals || []).map((m) => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join('') + '</select>' +
+    '<input type="number" id="clanAmount" value="100" min="1" max="' + rules.maxDepositUnits + '" style="width:80px">' +
+    '<button onclick="TD.clanDeposit()">внести</button></div>' +
+    '<div class="row" style="margin-top:6px">' +
+    '<button onclick="TD.clanLeave()">выйти</button>' +
+    (leader ? '<button onclick="TD.clanDisband()">расформировать</button>' : '') +
+    '</div>' +
+    '<p class="hint">Взнос — операция на два документа: резерв в казне, списание у вас, подтверждение. ' +
+    'Казна клана не возвращается при выходе, а расформирование возможно только с пустой казной.</p>';
+}
+
+function METAL_ROWS(treasury) {
+  return Object.keys(treasury || {})
+    .map((metal) => row('&nbsp;&nbsp;' + esc(metal), fmtNum(treasury[metal])))
+    .join('');
+}
 
 function renderPvp() {
   const tag = $('pvpTag');
@@ -3233,6 +3331,60 @@ const TD = {
         (result.result.field.until ? new Date(result.result.field.until).toLocaleTimeString('ru-RU', { hour12: false }) : '—') +
         (result.result.duplicate ? ' (дубль запроса отброшен)' : ''), 'ok');
     });
+  },
+
+  // ─── Клан ───────────────────────────────────────────────────────────────────
+  // Каждое действие перечитывает /v1/clan, а не дописывает ответ локально: клан —
+  // чужой документ, и его состояние между нашими запросами может изменить кто угодно.
+
+  clanCreate() {
+    const name = ($('clanName').value || '').trim();
+    const tag = ($('clanTagInput').value || '').trim();
+    return act('основание клана', async function () {
+      const result = await api('POST', '/v1/clan', { name, tag: tag || null });
+      log('клан ' + result.result.clan.name + ' · ' +
+        (result.result.active ? 'оплачен и активен' : 'ждет подтверждения оплаты'),
+        result.result.active ? 'ok' : 'err');
+      await loadClan();
+    });
+  },
+
+  clanJoin() {
+    const name = ($('clanJoinName').value || '').trim();
+    return act('вступление в клан', async function () {
+      const result = await api('POST', '/v1/clan/join', { name });
+      log('вступили в ' + result.result.clan.name + ' · участников ' +
+        result.result.clan.members + '/' + result.result.clan.limit, 'ok');
+      await loadClan();
+    });
+  },
+
+  clanDeposit() {
+    const metal = ($('clanMetal').value || 'black_metal');
+    const amount = Number(($('clanAmount').value || 1));
+    return act('взнос в казну', async function () {
+      const result = await api('POST', '/v1/clan/deposit', { metal, amount });
+      log('взнос ' + amount + ' ' + metal + ' · казна ' + result.result.clan.treasuryUnits +
+        (result.result.settled ? '' : ' · обработка задержалась, сверится при следующем чтении'),
+        result.result.settled ? 'ok' : 'err');
+      await loadClan();
+    });
+  },
+
+  clanLeave() {
+    return act('выход из клана', async function () {
+      const result = await api('POST', '/v1/clan/leave', {});
+      log(result.result.clan ? 'вышли из клана' : 'клан расформирован: вы были единственным участником', 'ok');
+      await loadClan();
+    });
+  },
+
+  clanDisband() {
+    return act('расформирование клана', async function () {
+      const result = await api('POST', '/v1/clan/disband', {});
+      log('клан ' + result.result.clan.name + ' расформирован', 'ok');
+      await loadClan();
+    });
   }
 };
 
@@ -3250,6 +3402,7 @@ function renderAll() {
   renderPower();
   renderDefense();
   renderPvp();
+  renderClan();
   renderAnalysis();
   if (!S.replay) draw();
 }
