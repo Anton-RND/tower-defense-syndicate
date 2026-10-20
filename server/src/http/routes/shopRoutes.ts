@@ -4,6 +4,7 @@ import { describeCatalog } from '../../config/shop.js';
 import { describeBuilderShop, buyBuilder } from '../../modules/shop/builders.js';
 import { describeOrders } from '../../modules/payment/orders.js';
 import { noteClientReceipt, openCheckout } from '../../modules/payment/commit.js';
+import { AppError, ErrorCodes } from '../../lib/errors.js';
 import { accountOf, authHook, claimsOf } from '../auth.js';
 import type { AppContext } from '../context.js';
 import { accountAction, bodyOf, optionalStringOf, stringOf, viewOf } from '../helpers.js';
@@ -79,6 +80,23 @@ export function registerShopRoutes(app: FastifyInstance, ctx: AppContext): void 
     const now = ctx.now();
     const account = await accountOf(ctx, request);
     return { ...viewOf(ctx.config, account, now), result: { orders: describeOrders(account) } };
+  });
+
+  // Статус ОДНОГО заказа. Фронт обязан опрашивать именно его: после возврата в WebView
+  // игрок смотрит на одну кнопку («оплата обрабатывается»), а витрина всех заказов для
+  // этого заставляла бы клиента искать нужный по id и самому решать, что «наш» заказ —
+  // то ровно то решение, которое клиент принимать не должен.
+  app.get<{ Params: { orderId: string } }>('/v1/shop/orders/:orderId', auth, async (request) => {
+    const now = ctx.now();
+    const account = await accountOf(ctx, request);
+    const orderId = request.params.orderId;
+    const order = describeOrders(account).find((candidate) => candidate.id === orderId);
+    // Чужой заказ неотличим от несуществующего намеренно: `describeOrders` читает только
+    // собственные заказы игрока, поэтому утечка была бы возможна лишь через id.
+    if (!order) {
+      throw new AppError(ErrorCodes.ORDER_NOT_FOUND, 404, 'Заказ не найден', { orderId });
+    }
+    return { ...viewOf(ctx.config, account, now), result: { order } };
   });
 
   app.post<{ Params: { orderId: string } }>('/v1/shop/orders/:orderId/receipt', auth, async (request) => {

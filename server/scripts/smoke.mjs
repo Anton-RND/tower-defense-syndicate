@@ -12,6 +12,8 @@
  * отладочных маршрутов невоспроизводимы.
  *
  * Покрытые модули (каждый — успешным действием И отказом домена, а не только 200 OK):
+ *  - Онбординг: стартовый комплект СВЕЖЕГО аккаунта (без единого гранта), первая
+ *    стройка дрона и турели, наличие хлама в рекламных наградах;
  *  - Materials: котировка станка, конверсия, повтор по тому же Idempotency-Key,
  *    зарядка станиума на потолок 24 ч, отказ при полном сроке, выход за пакет;
  *  - Workshop: стройка, частичное и полное ускорение, ускорение всей очереди,
@@ -22,6 +24,13 @@
  *  - PvP: посев соперников, подбор, два рейда на ЗАФИКСИРОВАННЫХ ботов (поле защитника
  *    обязано давать множитель 0.75 — на случайном сопернике это лотерея), пустой состав,
  *    атака на себя;
+ *  - Экономика/физика: витрина сети и сооружений, грант SEC, постройка конвертера,
+ *    а с P1 — ТРАТА SEC на ASIC-стойку (цена следующего экземпляра, отказ по
+ *    переплате и `−sec` в журнале: монета обязана быть расходуемой, а не только
+ *    накапающей);
+ *  - Клан (P2): основание за астериев, взнос в казну, вступление по имени вторым
+ *    аккаунтом, выход, отказ расформировать непустую казну, причины clan_create и
+ *    clan_deposit в журнале;
  *  - Ledger: каждая причина движения реально дошла до журнала;
  *  - Долг: возврат уже потраченного пака уводит сырьё в минус и блокирует траты.
  *
@@ -106,6 +115,47 @@ async function main() {
   token = login.token;
   const economy = await step('GET /v1/economy', 'GET', '/v1/economy');
   console.log(`     ${money(economy.economy)}`);
+
+  // ─── Онбординг: с чем игрок приходит сам, до первого гранта ───────────────────
+  // Блок существует потому, что весь остальной прогон начинается с /v1/dev/grant
+  // (строкой ниже) и потому молчит, когда новичок не может сделать ВООБЩЕ ничего:
+  // 87 зелёных шагов спокойно соседствовали с замкнутым кругом «хлам → рейд →
+  // дрон → хлам». Здесь проверяется ровно утверждение «стартовый комплект размыкает
+  // производство», и ни одним грантом оно не подкреплено.
+  const savedToken = token;
+  const freshLogin = await call('POST', '/v1/auth/dev-login', { socialId: `smoke-fresh-${RUN}` });
+  token = freshLogin.json?.token ?? '';
+  const freshView = await call('GET', '/v1/economy');
+  const kitWallet = freshView.json?.economy?.resources ?? {};
+  const kitJunk = freshView.json?.economy?.junk ?? {};
+  const freshDrone = await call('POST', '/v1/workshop/build', { code: 'drone_cargo_mk1' }, { idem: `fresh-drone-${RUN}` });
+  const freshTower = await call('POST', '/v1/workshop/build', { code: 'tower_laser_mk1' }, { idem: `fresh-tower-${RUN}` });
+  const freshOffers = (await call('GET', '/v1/ads/offers')).json?.offers ?? [];
+  token = savedToken;
+
+  const junkSkus = ['ad_chips_2', 'ad_batteries_2', 'ad_boards_2'];
+  const freshOk =
+    freshLogin.status === 200 &&
+    (kitWallet.ferrum ?? 0) > 0 &&
+    (kitJunk.batteries ?? 0) >= 2 &&
+    (kitJunk.chips ?? 0) >= 2 &&
+    freshDrone.status === 200 &&
+    freshTower.status === 200 &&
+    junkSkus.every((sku) => freshOffers.some((offer) => offer?.sku === sku));
+  if (freshOk) {
+    console.log(
+      `ok   онбординг новичка: комплект (${kitWallet.ferrum} железа, ${kitJunk.batteries} бат., ${kitJunk.chips} чип.) ` +
+        `открывает дрон и турель без единого гранта · хлам в рекламе: ${junkSkus.length}/${junkSkus.length}`
+    );
+  } else {
+    failures += 1;
+    console.log(
+      `FAIL онбординг новичка: login=${freshLogin.status} железо=${kitWallet.ferrum} батареи=${kitJunk.batteries} ` +
+        `чипы=${kitJunk.chips} дрон=${freshDrone.status}(${freshDrone.json?.error?.code ?? ''}) ` +
+        `турель=${freshTower.status}(${freshTower.json?.error?.code ?? ''}) реклама=${junkSkus.filter((sku) => freshOffers.some((o) => o?.sku === sku)).length}/3`
+    );
+  }
+
 
   // ─── Молекулярный станок: курс, списание, идемпотентность ──────────────────────
   await step('грант астерия', 'POST', '/v1/dev/grant', { asteriumEarned: 500 });
@@ -192,6 +242,21 @@ async function main() {
   // ─── Магазин: пак сырья, подтверждение площадкой, возврат ─────────────────────
   const order = await step('заказ wolfram_pack_50', 'POST', '/v1/shop/orders', { sku: 'wolfram_pack_50' });
   const orderId = order.result?.order?.id;
+  // Контракт фронта (`VkPaymentManager`) читает из этого ответа именно эти поля и
+  // больше ничего: `result.order.id` для окна оплаты, `result.box` для параметров
+  // VKWebAppShowOrderBox, `result.priceRub` для сверки. Если фронт начнёт читать
+  // `orderId` верхнего уровня — он получит undefined и платёж умрёт на шаге 1
+  // с текстом «Заказ не создан»; этот шаг падает ровно на этом же месте, но сразу.
+  if (typeof order.result?.box?.type !== 'string') fail('у заказа нет result.box.type — фронт не сможет открыть окно оплаты');
+  if (typeof order.result?.priceRub !== 'number') fail('у заказа нет result.priceRub — витрина не покажет цену площадки');
+  if (order.result?.resumed !== false) fail('первый заказ не обязан быть resumed: ретрай — свойство повторного запроса');
+  // Статус ОДНОГО заказа: на нём висит опрос «оплата обрабатывается» после возврата
+  // в WebView. Маршрута раньше не было вовсе — фронт опрашивал `/v1/shop/orders/<id>`
+  // и получал 404, то есть крутил таймаут до конца, не зная, выдан ли товар.
+  const orderState = await step('статус одного заказа', 'GET', `/v1/shop/orders/${encodeURIComponent(orderId ?? '')}`);
+  if (orderState.result?.order?.id !== orderId) fail('статус заказа вернул не тот заказ');
+  if (orderState.result?.order?.status !== 'pending') fail(`свежий заказ обязан быть pending, а не ${orderState.result?.order?.status}`);
+  await expectRefusal('чужой заказ не существует для этого игрока', 'GET', '/v1/shop/orders/order:not-mine:1', undefined, 'ORDER_NOT_FOUND');
   const paid = await step('подтвердить оплату (dev-постбэк)', 'POST', '/v1/dev/payments/confirm', { orderId, providerOrderId: 'vk-1' });
   console.log(`     выдано: ${paid.result?.granted} · вольфрам ${paid.economy?.materials?.wolfram}`);
   const requoted = await step('повторное подтверждение тем же заказом', 'POST', '/v1/dev/payments/confirm', { orderId });
@@ -358,7 +423,14 @@ async function main() {
   if (!((secGrant.economy?.resources?.sec ?? 0) >= 500)) fail('грант SEC не дошёл до кошелька');
 
   await step('грант на сооружения', 'POST', '/v1/dev/grant', {
-    ferrum: 200000, silicium: 80000, chips: 800, black_metal: 40000, colored_metal: 40000, chronium: 400
+    // Покрывает ВСЕ виды, которые этот прогон ставит: конвертер Mk.I (железо,
+    // кремний, чипы, чермет), ASIC Mk.I (то же + цветмет) и ASIC Mk.II (доски и
+    // драгоценный металл). Если здесь не хватает сырья, стройка падает на
+    // INSUFFICIENT_FUNDS по материалу — и блок проверки SEC до кассы не доходит,
+    // показывая провал там, где проблема в гранте.
+    ferrum: 200000, silicium: 80000, chips: 800, boards: 800,
+    black_metal: 40000, colored_metal: 40000, precious_metal: 40000,
+    chronium: 400
   });
   const supplyBefore = power.supplyOnline ?? 0;
   const structureJob = await step('поставить плазменный конвертер', 'POST', '/v1/workshop/build', { code: 'reactor_plasma_mk1' });
@@ -375,8 +447,101 @@ async function main() {
   if ((built.economy?.power?.supplyOnline ?? 0) <= supplyBefore)
     fail(`генерация не выросла после сборки конвертера (${supplyBefore} → ${built.economy?.power?.supplyOnline}) — сеть не читает состав базы`);
 
+  // ─── P1: монета имеет сток ────────────────────────────────────────────────────
+  // До этого блока SEC был односторонним: `industry` капал его в кошелёк, витрина
+  // показывала `secSpendable`, журнал писал «+sec» — и снять монету было негде. Смоук
+  // это пропускал, потому что проверял наличие поля, а не наличие траты. Здесь
+  // проверяется само свойство «это деньги»: их можно потратить, отказ по переплате
+  // реален, а цена следующего экземпляра отличается от цены первого (рост по виду).
+  if (!structs.every((s) => typeof s.secCost === 'number'))
+    fail('у сооружения нет secCost — витрина не может показать цену следующего экземпляра');
+
+  await step('грант хрониума на добор стоек', 'POST', '/v1/dev/grant', { chronium: 400 });
+
+  const mk1 = await step('ASIC Mk.I строится без монеты', 'POST', '/v1/workshop/build', { code: 'asic_rack_mk1' });
+  // Первый ASIC обязан быть бесплатным в SEC: монета капает только с ASIC, поэтому
+  // цена в монете на первой стойке замкнула бы экономику на её же собственном
+  // продукте — тот класс взаимоблокировки, что починен стартовым комплектом.
+  if (mk1.result?.secSpent !== 0) fail('Mk.I взяла SEC — источник дохода стал недоступен без дохода');
+  await step('добить Mk.I', 'POST', '/v1/workshop/build/speedup-all', {}, { idem: 'smoke-sec-mk1' });
+
+  const preMk2 = await step('витрина перед Mk.II', 'GET', '/v1/economy');
+  const walletBefore = preMk2.economy?.resources?.secSpendable ?? 0;
+  const mk2Price = (preMk2.economy?.structures ?? []).find((s) => s.id === 'asic_rack_mk2')?.secCost ?? 0;
+  if (mk2Price <= 0) fail('Mk.II не стоит SEC — у монеты по-прежнему нет стока');
+
+  const mk2 = await step('ASIC Mk.II за монету', 'POST', '/v1/workshop/build', { code: 'asic_rack_mk2' });
+  const secSpent = mk2.result?.secSpent ?? 0;
+  if (secSpent !== mk2Price) fail(`Mk.II списала ${secSpent}, а витрина обещала ${mk2Price} — касса и ценник разошлись`);
+  const postMk2 = await step('витрина после Mk.II', 'GET', '/v1/economy');
+  const walletAfter = postMk2.economy?.resources?.secSpendable ?? 0;
+  console.log(`     монета: ${walletBefore} → списано ${secSpent} → ${walletAfter} (кошелёк ${postMk2.economy?.resources?.sec})`);
+  if (walletAfter > walletBefore - secSpent) fail(`кошелёк просел меньше, чем списано (${walletBefore} → ${walletAfter} при списанном ${secSpent})`);
+
+  await step('добить Mk.II', 'POST', '/v1/workshop/build/speedup-all', {}, { idem: 'smoke-sec-mk2' });
+  const grown = await step('витрина после Mk.II на базе', 'GET', '/v1/economy');
+  const mk2Next = (grown.economy?.structures ?? []).find((s) => s.id === 'asic_rack_mk2')?.secCost ?? 0;
+  if (!(mk2Next > mk2Price)) fail(`цена следующей Mk.II не выросла (${mk2Price} → ${mk2Next}) — рост по виду не доехал до клиента`);
+  console.log(`     цена следующей Mk.II: ${mk2Price} → ${mk2Next} (рост от количества)`);
+
+  // Отказ по переплате — вторая половина «это деньги»: без него сток существовал бы
+  // только на бумаге. Кошелёк после покупки Mk.II заведомо тоньше новой цены.
+  await expectRefusal('вторую Mk.II без монеты', 'POST', '/v1/workshop/build', { code: 'asic_rack_mk2' }, 'INSUFFICIENT_FUNDS');
+
+  const craftEntries = await step('журнал трат крафта', 'GET', '/v1/ledger?reason=craft&limit=50');
+  const secDebits = (craftEntries.entries ?? []).filter((e) => e.currency === 'sec' && e.delta < 0);
+  if (secDebits.length === 0) fail('в журнале нет ни одного −sec — трата монеты не оставила аудиторского следа');
+
   await step('журнал по причине industry', 'GET', '/v1/ledger?reason=industry&limit=10');
   await expectRefusal('неизвестная причина журнала', 'GET', '/v1/ledger?reason=bogus', undefined, 'VALIDATION_ERROR');
+
+  // ─── P2: клан через HTTP ─────────────────────────────────────────────────────
+  // Домен клана давно покрыт автотестами (clan.test.ts), но маршрутов не было вовсе:
+  // игрок не мог ни основать клан, ни внести металл. Этот блок проверяет именно
+  // транспорт — auth, два документа, журнал и отказы домена — а не математику казны.
+  const mainToken = token;
+  const clanName = 'Плот ' + String(RUN).slice(-6);
+
+  const leaderLogin = await step('dev-login (лидер клана)', 'POST', '/v1/auth/dev-login', { socialId: `dev-clan-leader-${RUN}` });
+  token = leaderLogin.token;
+  // Заработанный кошелёк, а не купленный: `spendAsterium` тратит первым заработанный,
+  // а ключ гранта — `asteriumEarned` (единого `asterium` в dev-маршруте нет).
+  await step('грант астерия на основание', 'POST', '/v1/dev/grant', { asteriumEarned: 300 });
+
+  const beforeClan = await step('витрина клана до основания', 'GET', '/v1/clan');
+  if (typeof beforeClan.membership?.canCreate !== 'boolean') fail('clan.membership.canCreate отсутствует — UI не знает, сереть ли кнопку');
+  if (beforeClan.membership?.canCreate !== true) fail('игрок с 300 астерия не может основать клан за 250');
+  if (typeof beforeClan.rules?.createCost !== 'number') fail('clan.rules.createCost отсутствует — фронт не знает цену до нажатия');
+
+  const created = await step('основать клан', 'POST', '/v1/clan', { name: clanName, tag: 'ПЛОТ' });
+  if (created.result?.active !== true) fail('клан не стал активен после оплаченного основания');
+  if (created.result?.clan?.members !== 1) fail('вновь основанный клан обязан содержать ровно одного участника — основателя');
+  await expectRefusal('второе основание, уже состоя', 'POST', '/v1/clan', { name: clanName }, 'ALREADY_IN_CLAN');
+
+  await step('грант металлов на взнос', 'POST', '/v1/dev/grant', { black_metal: 5000 });
+  const deposit = await step('взнос в казну', 'POST', '/v1/clan/deposit', { metal: 'black_metal', amount: 500 });
+  if (deposit.result?.settled !== true) fail('взнос не подтверждён — казна растёт только из settled-записей');
+  if (deposit.result?.clan?.treasury?.black_metal !== 500) fail(`казна не выросла до 500: ${JSON.stringify(deposit.result?.clan?.treasury)}`);
+  await expectRefusal('взнос сверх остатка', 'POST', '/v1/clan/deposit', { metal: 'black_metal', amount: 900000 }, 'CLAN_DEPOSIT_INVALID');
+
+  const memberLogin = await step('dev-login (рядовой)', 'POST', '/v1/auth/dev-login', { socialId: `dev-clan-member-${RUN}` });
+  const leaderToken = token;
+  token = memberLogin.token;
+  await expectRefusal('взнос не состоя в клане', 'POST', '/v1/clan/deposit', { metal: 'black_metal', amount: 10 }, 'NOT_IN_CLAN');
+  await expectRefusal('вступление в несуществующий клан', 'POST', '/v1/clan/join', { name: 'Клана Нет' }, 'CLAN_NOT_FOUND');
+  const joined = await step('вступить по имени', 'POST', '/v1/clan/join', { name: clanName });
+  if (joined.result?.clan?.members !== 2) fail('после вступления участников должно стать двое');
+  const left = await step('выйти из клана', 'POST', '/v1/clan/leave', {});
+  if (left.result?.clan?.members !== 1) fail('после выхода должен остаться один основатель');
+
+  token = leaderToken;
+  await expectRefusal('расформировать с полной казной', 'POST', '/v1/clan/disband', {}, 'CONFLICT');
+  const createdEntries = await step('журнал основания клана', 'GET', '/v1/ledger?reason=clan_create&limit=10');
+  if (!Array.isArray(createdEntries.entries)) fail('журнал по clan_create не вернулся списком');
+  const depositEntries = await step('журнал взносов', 'GET', '/v1/ledger?reason=clan_deposit&limit=10');
+  if (!Array.isArray(depositEntries.entries)) fail('журнал по clan_deposit не вернулся списком');
+
+  token = mainToken;
 
   console.log(failures === 0 ? '\nсмоук чист: 0 провалов' : `\nсмоук: провалов ${failures}`);
   process.exit(failures === 0 ? 0 : 1);

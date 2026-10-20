@@ -6,15 +6,15 @@
  * он ничего не доказывает площадке и легко подделывается тем, кто умеет открывать
  * DevTools в WebView. Поэтому клиент делает ровно три вещи:
  *
- *   1. просит у сервера заказ (`POST /v1/payments/orders`) — цену и SKU выбирает
+ *   1. просит у сервера заказ (`POST /v1/shop/orders`) — цену и SKU выбирает
  *      сервер, клиент не имеет права предлагать свою;
  *   2. показывает нативное окно площадки;
- *   3. сообщает серверу номер платежа из ответа bridge (`.../receipt`) — это только
- *      диагностика для поддержки, и товар оно НЕ выдаёт.
+ *   3. сообщает серверу номер платежа из ответа bridge (`/v1/shop/orders/<id>/receipt`)
+ *      — это только диагностика для поддержки, и товар оно НЕ выдаёт.
  *
  * Товар появляется у игрока, когда площадка пришлёт серверу подписанное подтверждение
  * (server-to-server), и фронт узнаёт об этом единственным честным способом: опросом
- * статуса заказа (`GET /v1/payments/orders`). Пока заказ не в `fulfilled`, интерфейс
+ * статуса заказа (`GET /v1/shop/orders/<id>`). Пока заказ не в `fulfilled`, интерфейс
  * обязан показывать «оплата обрабатывается», а не «купите ещё раз».
  *
  * ТРАНСПОРТ ИНЖЕКТИТСЯ, а не импортируется — тот же принцип, что у VkSocialManager:
@@ -71,6 +71,26 @@ export interface OrderState {
   amount: number;
 }
 
+/**
+ * Срез ответа сервера. Намеренно НЕ плоский: HTTP-слой проекта возвращает действие
+ * под полным снимком игрока (`{ user, economy, result: {...} }`), и `api` — обёртка
+ * над fetch, а не над распаковщиком. Разбираем конверт здесь, иначе менеджер
+ * молча получит `undefined` в `orderId` и каждый платёж умрёт на шаге 1
+ * с внятным «Заказ не создан», ничего не сказав про настоящую причину.
+ */
+interface CheckoutEnvelope {
+  result?: {
+    order?: { id?: string; sku?: string };
+    box?: { type?: string; item?: string | null };
+    priceRub?: number;
+    resumed?: boolean;
+  };
+}
+
+interface OrderEnvelope {
+  result?: { order?: OrderState | null };
+}
+
 export type PurchaseStatus = 'submitted' | 'cancelled' | 'unsupported' | 'error' | 'quote_failed';
 
 /** Итог попытки оплаты. ВАЖНО: `submitted` — это «окно закрыто», а не «товар выдан». */
@@ -98,13 +118,32 @@ export class VkPaymentManager {
   ) {}
 
   private get basePath(): string {
-    return this.options.basePath ?? '/v1/payments/orders';
+    // `/v1/shop/orders`, а не `/v1/payments/orders`: маршрут живёт в shopRoutes.ts
+    // (Часть 1 ТЗ назвала его «магазин»), и прежний префикс здесь был опечаткой по
+    // аналогии с доменным слоем `modules/payment`, а не ссылкой на существующий URL.
+    // Типами такая drift не ловится — это строка, поэтому путь закрыт тестом
+    // server/test/http.frontend-contract.test.ts.
+    return this.options.basePath ?? '/v1/shop/orders';
   }
 
   /** Шаг 1: сервер создаёт заказ и говорит, какими параметрами открывать окно оплаты. */
   async quote(sku: string): Promise<OrderQuote | null> {
     try {
-      return await this.options.api.post<OrderQuote>(this.basePath, { sku });
+      const response = await this.options.api.post<CheckoutEnvelope>(this.basePath, { sku });
+      const result = response?.result;
+      const orderId = result?.order?.id;
+      if (!orderId) {
+        this.log('Сервер вернул заказ без id', { sku });
+        return null;
+      }
+      const type = result?.box?.type === 'votes' ? 'votes' : 'item';
+      return {
+        orderId,
+        sku: result?.order?.sku ?? sku,
+        box: { type, item: result?.box?.item ?? null },
+        priceRub: result?.priceRub ?? 0,
+        resumed: result?.resumed === true
+      };
     } catch (error) {
       this.log('Сервер отклонил запрос заказа', { sku, error: this.text(error) });
       return null;
@@ -159,7 +198,12 @@ export class VkPaymentManager {
   /** Статус заказа: UI опрашивает его после `submitted`, пока не появится `fulfilled`. */
   async orderState(orderId: string): Promise<OrderState | null> {
     try {
-      return await this.options.api.get<OrderState>(`${this.basePath}/${encodeURIComponent(orderId)}`);
+      const response = await this.options.api.get<OrderEnvelope>(
+        `${this.basePath}/${encodeURIComponent(orderId)}`
+      );
+      const order = response?.result?.order ?? null;
+      if (!order) this.log('Сервер вернул пустой статус заказа', { orderId });
+      return order;
     } catch (error) {
       this.log('Не удалось прочитать статус заказа', { orderId, error: this.text(error) });
       return null;
@@ -191,7 +235,7 @@ export class VkPaymentManager {
  *
  *   const calls: Array<[string, unknown]> = [];
  *   const bridge = { send: async (m: string, p?: unknown) => { calls.push([m, p]); return { order_id: 77 }; } };
- *   const api = { post: async () => ({ orderId: 'order:u1:1', sku: 'asterium_pack_500', box: { type: 'item', item: 'asterium_pack_500' }, priceRub: 49, resumed: false }), get: async () => null };
+ *   const api = { post: async () => ({ result: { order: { id: 'order:u1:1', sku: 'asterium_pack_500' }, box: { type: 'item', item: 'asterium_pack_500' }, priceRub: 49, resumed: false } }), get: async () => ({ result: { order: null } }) };
  *   const payments = new VkPaymentManager(bridge, { api });
  *   const result = await payments.purchase('asterium_pack_500');
  *   // result.status === 'submitted', result.providerOrderId === '77', calls[0][0] === 'VKWebAppShowOrderBox'
