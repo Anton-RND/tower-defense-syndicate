@@ -1,6 +1,8 @@
 import { createConnection, type Connection } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from '../src/config/env.js';
 import { MARKET_CORRIDORS, MARKET_LOT_TTL_MS, MARKET_PRICE_DYNAMICS, hardBoundsOf } from '../src/config/market.js';
@@ -62,12 +64,33 @@ const D = MARKET_PRICE_DYNAMICS;
 const externalUri = process.env.TD_MONGO_URI ?? null;
 const disableMemory = process.env.TD_MONGO_MEMORY === 'off';
 
+/**
+ * Каталог бинарника стенда — АБСОЛЮТНЫЙ и не зависящий от cwd.
+ *
+ * Ловушка, найденная этим прогоном: `mongodb-memory-server` якорит свой кэш на
+ * ближайший `package.json` с секцией `config`, а ищет он ПОСЛЕДНИМ ШАГОМ ОТ cwd
+ * ВВЕРХ. Монитор-процесс поднят из `server/` и находит
+ * `server/node_modules/.cache/mongodb-memory-server/` с уже лежащим там
+ * `mongod-x64-win32-8.2.6.exe`; тот же набор тестов, запущенный корнем
+ * (`npm test` в корне репозитория), якоря не находит, уходит в глобальный
+ * `%LOCALAPPDATA%` — и начинает скачивать 781 МБ посреди прогона.
+ *
+ * Отсюда два следствия, и оба хуже, чем «долго». Первое: прогон из корня висит
+ * минуты, и это неотличимо от зависшего подключения к базе. Второе: прерванный
+ * (по таймауту реда, по Ctrl+C) download оставляет в глобальном кэше `*.lock` и
+ * `*.zip.downloading`, и каждый следующий прогон упирается в замок.
+ *
+ * Путь от `import.meta.url` не зависит от cwd, поэтому корень и `server/`
+ * получают один и тот же каталог и одно и то же попадание в кэш.
+ */
+const STAND_BIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', '.cache', 'mongodb-memory-server');
+
 let memory: MongoMemoryServer | null = null;
 let uri: string | null = externalUri;
 
 if (!uri && !disableMemory) {
   try {
-    memory = await MongoMemoryServer.create();
+    memory = await MongoMemoryServer.create({ binary: { downloadDir: STAND_BIN_DIR } });
     uri = memory.getUri();
   } catch (error) {
     // Причина пишется в вывод vitest: «набор пропущен» без объяснения позже примут
