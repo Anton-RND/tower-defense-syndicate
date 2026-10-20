@@ -80,6 +80,8 @@ export function registerPvpRoutes(app: FastifyInstance, ctx: AppContext): void {
       defenderId,
       outcome: result.battle.outcome,
       loot: result.loot,
+      defenderLoot: committed.defenderLoot,
+      defenderLootSkipped: committed.defenderLootSkipped,
       defenderCommitted: committed.defenderCommitted
     });
     return {
@@ -93,6 +95,8 @@ export function registerPvpRoutes(app: FastifyInstance, ctx: AppContext): void {
         stolen: result.stolen,
         energy: result.energy,
         attacksRemaining: result.attacksRemaining,
+        defenderLoot: committed.defenderLoot,
+        defenderLootSkipped: committed.defenderLootSkipped,
         defenderCommitted: committed.defenderCommitted
       }
     };

@@ -10,7 +10,9 @@ import {
   attacksRemainingToday,
   attacksToday,
   commitRaid,
+  grantDefenderLoot,
   makeRaidId,
+  mirrorOutcome,
   resolveRaid,
   type RaidInput
 } from '../src/modules/pvp/raid.js';
@@ -18,7 +20,8 @@ import { MemoryUserStore } from '../src/modules/user/memory.store.js';
 import type { UserAccount } from '../src/modules/user/user.types.js';
 import { ATTACK_ENERGY_COST, MATCH_BAND_START, OUTCOME_STEAL_FACTOR, RAID_FUEL_HORIZON_MS } from '../src/config/pvp.js';
 import { STANIUM_SPEED_MULTIPLIER } from '../src/config/materials.js';
-import { T0, addMs, entitlement, errorCode, fixedRng, HOUR, itemOf, MINUTE, newAccount, testConfig, withMined, withMetals, withPvp, withResources, withStaniumField, withStorages } from './fixtures.js';
+import { T0, addMs, entitlement, errorCode, fixedRng, HOUR, itemOf, MINUTE, newAccount, testConfig, withJunk, withMined, withMetals, withPvp, withResources, withStaniumField, withStorages } from './fixtures.js';
+import { junkTotal, type MaterialCost } from '../src/config/workshop.js';
 
 /**
  * Рейд (Шаг 4): подбор соперника, расчёт боя и запись на два документа.
@@ -390,6 +393,105 @@ describe('pvp/raid: запись на два документа', () => {
     // клиента стал бы вторым боем, а «проигравший» защитник остался бы без потерь
     // и без уведомления.
     expect((await store.findById(attacker.id))?.pvp.battles).toBe(1);
+  });
+});
+
+describe('pvp/raid: лут защитника за сбитую технику', () => {
+  /** Подставляем заведомое число сожжённых дронов: исход боя предсказывать незачем. */
+  function withKills(result: ReturnType<typeof resolveRaid>, lost: number): ReturnType<typeof resolveRaid> {
+    return { ...result, battle: { ...result.battle, robots: { ...result.battle.robots, lost } } };
+  }
+
+  const lootUnits = (loot: MaterialCost): number =>
+    Object.values(loot).reduce((total, value) => total + (value ?? 0), 0);
+
+  it('исход зеркален: победа атакующего — поражение хозяина базы', () => {
+    expect(mirrorOutcome('win')).toBe('loss');
+    expect(mirrorOutcome('loss')).toBe('win');
+    expect(mirrorOutcome('draw')).toBe('draw');
+  });
+
+  it('защитник получает хлам за сбитые дроны, а не только теряет склады', () => {
+    const defender = makeDefender('80');
+    const attacker = makeAttacker('81', ['drone_cargo_mk1']);
+    const result = resolveRaid(attacker, raidInput(attacker, defender));
+    const granted = grantDefenderLoot(defender, withKills(result, 20), T0, config.economy, fixedRng(0.9));
+
+    expect(granted.skipped).toBeNull();
+    expect(junkTotal(granted.account.junk)).toBeGreaterThan(0);
+    expect(granted.drafts.length).toBeGreaterThan(0);
+    expect(granted.drafts.every((draft) => draft.userId === defender.id)).toBe(true);
+    expect(granted.drafts.every((draft) => draft.reason === 'battle_loot')).toBe(true);
+    expect(granted.drafts.every((draft) => draft.currency.startsWith('junk_'))).toBe(true);
+  });
+
+  it('переполненный склад хлама не отменяет бой: лут просто не выдан', () => {
+    const strict = testConfig({ JUNK_CAP: '4' }).economy;
+    const defender = withJunk(makeDefender('82'), { chips: 4 });
+    const attacker = makeAttacker('83', ['drone_cargo_mk1']);
+    const result = resolveRaid(attacker, raidInput(attacker, defender));
+    const granted = grantDefenderLoot(defender, withKills(result, 20), T0, strict, fixedRng(0.9));
+
+    // Отказ — это `skipped`, а не исключение: бой уже засчитан атакующему, и
+    // выбросить здесь сломало бы ему рейтинг и списание складов из-за чужого переполнения.
+    expect(granted.skipped).toBe(ErrorCodes.JUNK_CAP_REACHED);
+    expect(granted.drafts).toEqual([]);
+    expect(granted.account).toBe(defender);
+  });
+
+  it('повтор того же боя не выдаёт защитнику второй комплект обломков', () => {
+    const defender = makeDefender('84');
+    const attacker = makeAttacker('85', ['drone_cargo_mk1']);
+    const result = resolveRaid(attacker, raidInput(attacker, defender));
+    const killed = withKills(result, 20);
+    const first = grantDefenderLoot(defender, killed, T0, config.economy, fixedRng(0.9));
+    const second = grantDefenderLoot(first.account, killed, T0, config.economy, fixedRng(0.9));
+
+    expect(second.skipped).toBe(ErrorCodes.DUPLICATE_ORDER);
+    expect(second.account.junk).toEqual(first.account.junk);
+  });
+
+  it('commitRaid кладёт хлам в живой документ защитника, а дельта равна отчету', async () => {
+    const store = new MemoryUserStore();
+    const ledger = new MemoryLedgerStore();
+    const attacker = makeAttacker('86', ['drone_strike_mk2', 'drone_strike_mk2']);
+    const defender = withMined(makeDefender('87'), { ferrum: 1000 });
+    await store.save(attacker);
+    await store.save(defender);
+
+    const commit = await commitRaid(raidInput(attacker, defender), {
+      store,
+      ledger,
+      idFactory: () => nextId('led')
+    });
+    expect(commit.defenderCommitted).toBe(true);
+    expect(commit.defenderLootSkipped).toBeNull();
+
+    const stored = await store.findById(defender.id);
+    if (!stored) throw new Error('документ защитника пропал');
+    expect(junkTotal(stored.junk) - junkTotal(defender.junk)).toBe(lootUnits(commit.defenderLoot));
+    // Ровно по одной записи на каждый выданный вид хлама — ни лишних, ни потерянных.
+    expect(await ledger.count(defender.id)).toBe(Object.keys(commit.defenderLoot).length);
+  });
+
+  it('провал записи защитника не оставляет движения без факта', async () => {
+    const store = new MemoryUserStore();
+    const ledger = new MemoryLedgerStore();
+    const attacker = makeAttacker('88', ['drone_strike_mk2']);
+    const defender = makeDefender('89');
+    await store.save(attacker); // защитника в сторе нет — его удалили между подбором и записью
+
+    const commit = await commitRaid(raidInput(attacker, defender), {
+      store,
+      ledger,
+      idFactory: () => nextId('led'),
+      onDefenderError: () => {}
+    });
+
+    expect(commit.defenderCommitted).toBe(false);
+    expect(commit.defenderLoot).toEqual({});
+    expect(commit.defenderLootSkipped).toBe('defender_write_failed');
+    expect(await ledger.count(defender.id)).toBe(0);
   });
 });
 

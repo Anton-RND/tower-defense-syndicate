@@ -51,6 +51,13 @@ export const LEDGER_REASONS = [
   'raid_loot', // трофей с чужой базы
   'raid_loss', // что украли у нас
   'assist', // «Помощь друга» (п.2.3)
+  /**
+   * Стартовый комплект новичка (config/starter.ts). Отдельно от `admin`, потому что
+   * `admin` — это действие поддержки по конкретному тикету, а `starter` получает
+   * каждый аккаунт автоматически: смешав их, антифрод перестал бы отличать
+   * массовую выдачу от ручной компенсации.
+   */
+  'starter',
   'ad_reward', // награда за подтверждённый показ рекламы
   'purchase', // оплата реальными деньгами (VK Pay / витрина)
   'subscription', // подписка/дейли-пакет
@@ -162,6 +169,7 @@ export function makeIdempotencyKey(
     | 'convert'
     | 'stanium'
     | 'deploy'
+    | 'starter'
     | 'clan'
     | 'deposit',
   id: string

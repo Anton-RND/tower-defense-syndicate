@@ -1,9 +1,10 @@
 import type { EconomyConfig } from '../../config/env.js';
 import { type CraftTechId } from '../../config/materials.js';
+import { type JunkId, junkTotal } from '../../config/workshop.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
 import { grantEntitlement, type NewEntitlement } from '../economy/entitlements.js';
 import { dayKey } from '../economy/energy.js';
-import { credit, resource, tech, asterium, type MovementContext } from '../economy/wallet.js';
+import { credit, junk as junkTarget, resource, tech, asterium, type MovementContext } from '../economy/wallet.js';
 import { makeIdempotencyKey, type LedgerDraft } from '../ledger/ledger.types.js';
 import type { UserAccount } from '../user/user.types.js';
 
@@ -29,6 +30,18 @@ export type AdReward =
    * магазину, обнулив ARPPU на материалах.
    */
   | { kind: 'material'; material: CraftTechId; amount: number }
+  /**
+   * Хлам за просмотр рекламы — аварийный кран той ценности, от которой зависит
+   * ВСЁ дерево производства.
+   *
+   * Металлы и сырьё можно купить или перегнать из астерия, хлам же рождается только
+   * из боя (raid/loot.ts): проигравший, потерявший флот, не может восстановить его
+   * ничем, кроме как снова проиграть рейды. Реклама — единственный канал, который
+   * сервер может выдать игроку «на здесь и сейчас», поэтому она и получает
+   * материал, недоступный больше нигде. Значение намеренно 1-2 единицы за показ:
+   * кран должен выводить из ямы, а не заменять PvP (см. шапку config/ads.ts).
+   */
+  | { kind: 'junk'; junk: JunkId; amount: number }
   | { kind: 'entitlement'; entitlement: Omit<NewEntitlement, 'source' | 'orderId'> };
 
 /** Позиция каталога рекламных наград (SKU фиксируем на сервере, цена не живёт в клиенте). */
@@ -161,6 +174,28 @@ export function claimAdReward(
       next = movement.account;
       drafts.push(movement.draft);
       granted = `${offer.reward.material}:${offer.reward.amount}`;
+      break;
+    }
+    case 'junk': {
+      // Потолок склада хлама проверяется здесь же, а не «как-нибудь потом»:
+      // `credit` не знает про лимиты, и реклама стала бы единственным обходом
+      // JUNK_CAP_REACHED, по которому цех переработки потерял бы смысл.
+      const cap = config.limits.loot.junkCap;
+      const current = junkTotal(next.junk);
+      if (cap > 0 && current + offer.reward.amount > cap) {
+        throw new AppError(ErrorCodes.JUNK_CAP_REACHED, 409, 'Склад хлама переполнен — сдайте обломки в цех переработки', {
+          cap,
+          current,
+          incoming: offer.reward.amount
+        });
+      }
+      const movement = credit(next, junkTarget(offer.reward.junk), offer.reward.amount, {
+        ...ctxBase,
+        reason: 'ad_reward'
+      });
+      next = movement.account;
+      drafts.push(movement.draft);
+      granted = `${offer.reward.junk}:${offer.reward.amount}`;
       break;
     }
     case 'entitlement': {

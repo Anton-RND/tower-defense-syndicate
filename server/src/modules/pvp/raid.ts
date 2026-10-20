@@ -1,7 +1,7 @@
 import { ORE_IDS } from '../../config/storage.js';
 import type { EconomyConfig } from '../../config/env.js';
 import { ATTACK_ENERGY_COST, ATTACK_MIN_ROBOTS, OUTCOME_STEAL_FACTOR } from '../../config/pvp.js';
-import type { MaterialCost } from '../../config/workshop.js';
+import type { BattleOutcome, MaterialCost } from '../../config/workshop.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
 import { rngFromKey } from '../../lib/rng.js';
 import { isShielded } from '../economy/entitlements.js';
@@ -11,7 +11,7 @@ import { gainMaterials } from '../economy/wallet.js';
 import { makeIdempotencyKey, type LedgerDraft, type LedgerEntry } from '../ledger/ledger.types.js';
 import type { LedgerStore } from '../ledger/ledger.store.js';
 import { staniumSpeedMultiplier } from '../materials/service.js';
-import { generateBattleLoot } from '../raid/loot.js';
+import { generateBattleLoot, type BattleReport } from '../raid/loot.js';
 import type { StoragePools, UserAccount } from '../user/user.types.js';
 import type { UserStore } from '../user/user.store.js';
 import { resolveArmy, simulateBattle, type ArmyResolution, type BattleResult } from './battle.js';
@@ -349,6 +349,77 @@ export function applyRaidToDefender(current: UserAccount, result: RaidResult, no
   };
 }
 
+// ─── Лут защитника ────────────────────────────────────────────────────────────
+
+/**
+ * Исход боя глазами хозяина базы: его победа — поражение пришельца.
+ *
+ * Нужен именно зеркальный множитель, а не «защитнику всегда обломки»: отразивший
+ * рейд игрок сбил флот и обязан получить за это столько же, сколько атакующий
+ * получает за взятую базу. Иначе оборона остаётся чисто штрафной механикой, а
+ * единственный кран хлама в игре смотрит только на агрессора.
+ */
+export function mirrorOutcome(outcome: BattleOutcome): BattleOutcome {
+  if (outcome === 'win') return 'loss';
+  if (outcome === 'loss') return 'win';
+  return 'draw';
+}
+
+export interface DefenderLootOutcome {
+  account: UserAccount;
+  drafts: LedgerDraft[];
+  /** Что реально выдано (пустой объект — если выдача пропущена). */
+  loot: MaterialCost;
+  /** Код причины пропуска (`JUNK_CAP_REACHED`, `LOOT_LIMIT_REACHED`, `DUPLICATE_ORDER`) или null. */
+  skipped: string | null;
+}
+
+/**
+ * Хлам, оставшийся на поле после обороны: столько единиц техники атакующего
+ * потерял, сколько защитник уничтожил (`battle.robotsLost`).
+ *
+ * ЗАЧЕМ ЭТО НУЖНО, а не только «приятно». До этого файла хлам добывался только
+ * нападением, а стартовый аккаунт не имел ни грамма хлама — получался замкнутый
+ * круг (новичок не может собрать дрона, потому что дрон стоит батареи, а батареи
+ * дают за рейд, для рейда нужен дрон; см. config/starter.ts). Стартовый комплект
+ * размыкает вход в круг, а этот кран делает круг устойчивым: игрока, сожжённого
+ * дотла, возвращает в игру оборона его же башен, а не только новые набеги.
+ *
+ * ПОЧЕМУ ОТДЕЛЬНАЯ ФУНКЦИЯ, А НЕ ПРАВКА `applyRaidToDefender`. Тот редуктор —
+ * чистая дельта-математика без журнала, и его контракт уже держат четыре теста.
+ * Лут же может быть ОТКЛОНЁН (переполненный склад хлама, суточный потолок боёв,
+ * повтор боя), а клонить отказ в главный редуктор означало бы потерять рейтинг и
+ * списание складов защитника из-за того, что ему некуда положить обломки. Поэтому
+ * отказ здесь перехвачен и возвращён как `skipped`, а бой остаётся засчитанным.
+ *
+ * ГСЧ — отдельный поток, выведенный из `raidId:defender`, а не общий с атакой:
+ * CAS-повтор транзакции обязан давать тот же хлам, и смешивать две выборки в один
+ * stream означало бы зависеть от числа повторов.
+ */
+export function grantDefenderLoot(
+  account: UserAccount,
+  result: RaidResult,
+  now: Date,
+  config: EconomyConfig,
+  rng?: () => number
+): DefenderLootOutcome {
+  const report: BattleReport = {
+    raidId: result.raidId,
+    outcome: mirrorOutcome(result.battle.outcome),
+    destroyed: result.battle.robots.lost
+  };
+  try {
+    const loot = generateBattleLoot(account, report, now, config, rng ?? rngFromKey(`${result.raidId}:defender`));
+    return { account: loot.account, drafts: loot.drafts, loot: loot.loot, skipped: null };
+  } catch (error) {
+    if (error instanceof AppError) {
+      return { account, drafts: [], loot: {}, skipped: error.code };
+    }
+    throw error;
+  }
+}
+
+
 export interface CommitOptions {
   store: UserStore;
   ledger: LedgerStore;
@@ -367,6 +438,10 @@ export interface CommitResult {
    * не прошло (он удалил аккаунт, CAS-конфликт, БД моргнула).
    */
   defenderCommitted: boolean;
+  /** Хлам, доставшийся защитнику за сбитую технику. Пустой, если выдача пропущена. */
+  defenderLoot: MaterialCost;
+  /** Код причины пропуска (`JUNK_CAP_REACHED`, `LOOT_LIMIT_REACHED`, `DUPLICATE_ORDER`) или null. */
+  defenderLootSkipped: string | null;
 }
 
 /**
@@ -406,15 +481,36 @@ export async function commitRaid(input: RaidInput, options: CommitOptions): Prom
 
   let defenderCommitted = true;
   let defender = result.defender;
+  // Черновик лута защитника рождается ВНУТРИ редуктора, а пишется в журнал только
+  // после успешной записи документа: движение без факта запрещено (шапка
+  // ledger.store.ts). Провал транзакции защитника следовательно не оставляет ни хлама,
+  // ни записи о нём.
+  const capturedLoot: DefenderLootOutcome[] = [];
   try {
-    defender = await options.store.transact(input.defender.id, (current) =>
-      applyRaidToDefender(current, result, input.now)
-    );
+    defender = await options.store.transact(input.defender.id, (current) => {
+      const applied = applyRaidToDefender(current, result, input.now);
+      const loot = grantDefenderLoot(applied, result, input.now, input.config);
+      capturedLoot.push(loot);
+      return loot.account;
+    });
   } catch (error) {
     // Не глотаем молча: вызывающий слой видит флаг и поднимает алерт с raidId.
     defenderCommitted = false;
     options.onDefenderError?.(error instanceof Error ? error : new Error(String(error)));
   }
 
-  return { result, attacker, defender, defenderCommitted };
+  const grantedLoot = capturedLoot[capturedLoot.length - 1];
+  if (defenderCommitted && grantedLoot && grantedLoot.drafts.length > 0) {
+    const lootEntries: LedgerEntry[] = grantedLoot.drafts.map((draft) => ({ ...draft, id: options.idFactory() }));
+    await options.ledger.appendMany(lootEntries);
+  }
+
+  return {
+    result,
+    attacker,
+    defender,
+    defenderCommitted,
+    defenderLoot: defenderCommitted ? (grantedLoot?.loot ?? {}) : {},
+    defenderLootSkipped: defenderCommitted ? (grantedLoot?.skipped ?? null) : 'defender_write_failed'
+  };
 }

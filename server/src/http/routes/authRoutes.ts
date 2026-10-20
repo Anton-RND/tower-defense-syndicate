@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 
 import { AppError, ErrorCodes, forbidden } from '../../lib/errors.js';
 import { verifyVkInitData, type SocialIdentity } from '../../modules/auth/vk.adapter.js';
+import type { LedgerDraft } from '../../modules/ledger/ledger.types.js';
+import { applyStarterKit } from '../../modules/user/starter.js';
 import { createAccount, type UserAccount } from '../../modules/user/user.types.js';
 import { authHook, claimsOf } from '../auth.js';
 import type { AppContext } from '../context.js';
@@ -17,6 +19,13 @@ import { bodyOf, optionalStringOf, stringOf, viewOf } from '../helpers.js';
  *
  * Dev-путь закрыт тем же флагом, что и генератор initData (DEV_SIGNER_ENABLED), и
  * гасится в production на уровне загрузки конфига — см. env.ts:225.
+ *
+ * ТРЕТИЙ УЧАСТНИК ВХОДА — стартовый комплект (config/starter.ts). Он выдаётся
+ * здесь, в единственной точке рождения аккаунта, а не в `createAccount`: тот
+ * вызывается и для спарринг-ботов (/v1/dev/seed-opponents), которым комплект не
+ * нужен — их задача держать оборону, а не играть. Комплект начисляется через
+ * `gainMaterials` с причиной `starter`, поэтому каждое зерно стартового железа
+ * имеет запись в журнале.
  */
 
 type Identity = Pick<SocialIdentity, 'platform' | 'socialId' | 'appId' | 'groupId'>;
@@ -33,9 +42,31 @@ async function login(ctx: AppContext, identity: Identity, now: Date): Promise<Lo
     const account = await ctx.users.transact(found.id, (current) => ({ ...current, lastLoginAt: now }));
     return { account, created: false };
   }
-  const { account } = await ctx.users.getOrCreate(identity, now, (id, at) =>
-    createAccount(id, at, ctx.config.economy, ctx.idFactory)
-  );
+  // Черновики в массиве, а не в переменной: TS не отслеживает присваивания внутри
+  // колбэка (тот же приём, что в helpers.accountAction и pvp/raid.commitRaid).
+  const captured: LedgerDraft[][] = [];
+  const { account } = await ctx.users.getOrCreate(identity, now, (freshIdentity, at) => {
+    const blank = createAccount(freshIdentity, at, ctx.config.economy, ctx.idFactory);
+    const starter = applyStarterKit(blank, at);
+    captured.length = 0;
+    captured.push(starter.drafts);
+    return starter.account;
+  });
+  // Порядок «сначала состояние, потом журнал» — единственный допустимый в проекте
+  // (шапка helpers.ts). Комплект вшит в сам документ при создании, поэтому падение
+  // записи не оставляет игрока с нулями: он сохранится, а потерянный аудиторский
+  // след виден в логе и добирается Support-инструментом.
+  const drafts = captured[captured.length - 1] ?? [];
+  if (drafts.length > 0) {
+    const written = await ctx.ledger.appendMany(drafts.map((draft) => ({ ...draft, id: ctx.idFactory() })));
+    if (written < drafts.length) {
+      ctx.logger.warn('starter_drafts_dropped', {
+        userId: account.id,
+        expected: drafts.length,
+        written
+      });
+    }
+  }
   return { account, created: true };
 }
 
