@@ -92,6 +92,11 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     payments: ctx.config.economy.limits.purchases.enabled,
     ads: ctx.config.economy.limits.ads.enabled,
     dev: ctx.config.devSignerEnabled,
+    // Раздельно «включено» и «настроено»: `VK_PUSH_ENABLED=true` при отсутствии ключей
+    // — это конфигурационная ошибка, и `/health` обязан показывать её до первой продажи,
+    // а не после тысячи `notice_rejected` в логе.
+    push: ctx.notices.readiness(),
+    market_worker: ctx.config.market.worker.enabled,
     ts: ctx.now()
   }));
 

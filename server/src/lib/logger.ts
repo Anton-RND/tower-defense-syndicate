@@ -17,10 +17,28 @@ export interface LogRecord {
 }
 
 /**
+ * Форма логгера для инъекций.
+ *
+ * Модулям, которые пишут в лог (сторы, фоновые циклы, очередь уведомлений), нужен не
+ * класс `Logger`, а его сигнатура: иначе тесты вынуждены создавать настоящий логгер и
+ * перехватывать `process.stdout`, а структура, описывающая «куда пишет мой модуль»,
+ * оказалась бы привязана к конкретной реализации. `Logger` удовлетворяет этой форме
+ * структурно, а заглушка в тесте собирает записи в массив.
+ */
+export interface LogSink {
+  trace(msg: string, meta?: Record<string, unknown>): void;
+  debug(msg: string, meta?: Record<string, unknown>): void;
+  info(msg: string, meta?: Record<string, unknown>): void;
+  warn(msg: string, meta?: Record<string, unknown>): void;
+  error(msg: string, meta?: Record<string, unknown>): void;
+  fatal(msg: string, meta?: Record<string, unknown>): void;
+}
+
+/**
  * Мини-логгер (JSON-строки). Нужен недлинным модулям (сторы, экономика), которые
  * живут вне request-scoped pino-логгера Fastify и должны писать в один формат.
  */
-export class Logger {
+export class Logger implements LogSink {
   constructor(
     private readonly level: LogLevel = 'info',
     private readonly bindings: Record<string, unknown> = {},

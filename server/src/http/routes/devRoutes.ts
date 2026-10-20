@@ -66,6 +66,26 @@ export function registerDevRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { ...viewOf(ctx.config, account, now), result: { movements: meta.count } };
   });
 
+  /**
+   * Состояние очереди уведомлений (Часть 2, backlog 3).
+   *
+   * Единственная наблюдаемая точка пути «продажа → пуш». Сам факт рождается внутри
+   * денежного протокола, а доставка уходит в фон, поэтому ни того, ни другого нельзя
+   * увидеть ни в одном ответе игрока: продажа проходит молча, и молча потерянный пуш
+   * выглядит точно так же, как доставленный. Без этого маршрута проводку можно
+   * проверить только подняв подставной VK API, то есть силами оператора, а не смоука.
+   */
+  app.get('/v1/dev/notices', auth, async () => {
+    assertDevRoutes(ctx);
+    return {
+      result: {
+        readiness: ctx.notices.readiness(),
+        stats: ctx.notices.stats(),
+        queued: ctx.notices.size()
+      }
+    };
+  });
+
   app.post('/v1/dev/seed-opponents', auth, async (request) => {
     assertDevRoutes(ctx);
     const now = ctx.now();

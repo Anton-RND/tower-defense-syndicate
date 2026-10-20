@@ -550,7 +550,10 @@ async function main() {
   // Рынок — единственный домен, где одна операция касается трёх документов (лот,
   // покупатель, продавец), поэтому смоук прогоняет его двумя аккаунтами и проверяет
   // главное свойство денег: суммарная монета двоих проседает ровно на комиссию.
-  const sellerLogin = await step('dev-login (продавец рынка)', 'POST', '/v1/auth/dev-login', { socialId: `dev-mkt-seller-${RUN}` });
+  // Продавец заводится ЧИСЛОВЫМ socialId: `secure.sendNotification` принимает только
+  // числовой vk_user_id, и с именем вида `dev-mkt-seller-…` факт продажи упирался бы в
+  // ворота адресата, не доходя до транспорта. Так смоук проверяет весь путь целиком.
+  const sellerLogin = await step('dev-login (продавец рынка)', 'POST', '/v1/auth/dev-login', { socialId: `7${RUN % 900000000}` });
   token = sellerLogin.token;
   await step('грант хлама на продажу', 'POST', '/v1/dev/grant', { chips: 500 });
 
@@ -617,6 +620,20 @@ async function main() {
   const sellerWallet = (await step('кошелёк продавца', 'GET', '/v1/economy')).economy?.resources?.sec ?? 0;
   if (sellerWallet < 950) fail(`продавец получил ${sellerWallet} вместо ожидаемых ≥950 чистыми`);
   console.log(`     рынок: 1000 у покупателя → 950 продавцу, 50 SEC сгорело (комиссия)`);
+
+  // ─── Backlog 3: факт продажи дошёл до очереди уведомлений ──────────────────────
+  // Пуш уходит в фон и не виден ни в одном ответе игрока, поэтому проверяется
+  // состояние очереди: `enqueued` — если транспорт настроен, `refused` — если выключен
+  // или адресат не vk. Молча прошедшая продажа и молча потерянная должны различаться.
+  const notices = await step('очередь уведомлений', 'GET', '/v1/dev/notices');
+  const noticeStats = notices.result?.stats ?? {};
+  const reach = (noticeStats.enqueued ?? 0) + (noticeStats.refused ?? 0);
+  if (reach < 1) fail(`факт продажи не дошёл до очереди уведомлений (enqueued+refused=${reach})`);
+  if ((noticeStats.dropped ?? 0) !== 0) fail(`очередь выбросила уведомления: dropped=${noticeStats.dropped}`);
+  console.log(
+    `     пуш: ${JSON.stringify(notices.result?.readiness)} · принят ${noticeStats.enqueued ?? 0} · ` +
+    `отказано ${noticeStats.refused ?? 0} · отправлен ${noticeStats.sent ?? 0} · потерян ${noticeStats.lost ?? 0}`
+  );
 
   // Второй лот снимаем: хлам обязан вернуться владельцу, а не остаться в эскроу.
   const second = await step('выставить второй лот', 'POST', '/v1/market/lots', { junk: 'chips', amount: 5, pricePerUnit: 60 });

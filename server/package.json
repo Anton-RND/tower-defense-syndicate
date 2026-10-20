@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "vk:doctor": "node scripts/vk-init-data-doctor.mjs"
+    "vk:doctor": "tsx scripts/vk-doctor.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",

@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 
 import { MARKET_FEED_LIMIT } from '../../config/market.js';
 import { isJunkId } from '../../config/workshop.js';
-import { buyLot, cancelLot, listLot, reconcileMarket } from '../../modules/market/commit.js';
-import { repriceMarket } from '../../modules/market/economy.js';
+import { buyLot, cancelLot, listLot } from '../../modules/market/commit.js';
+import { runMarketMaintenance } from '../../modules/market/maintenance.js';
 import { describeLot, describeMarket, describeMarketRules } from '../../modules/market/view.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
 import { accountOf, authHook, claimsOf } from '../auth.js';
@@ -17,39 +17,27 @@ import { bodyOf, intOf, stringOf, viewOf } from '../helpers.js';
  * в market/commit.ts владеют транзакциями над ТРЕМЯ документами (лот, покупатель,
  * продавец), и сверху такой атомарности не собрать.
  *
- * ЧТЕНИЕ ВИТРИНЫ разбирает зависшие лоты (`reconcileMarket`) и пересчитывает
- * коридоры (`repriceMarket`) — иначе «оплата обрабатывается» превратилось бы в
- * вечное состояние, а «живая экономика» осталась бы таблицей из конфига. Оба —
- * по одной причине: без фонового воркера чтение витрины единственный момент,
- * когда рынок имеет право доделать за кем-то и подвинуть цены (см. шапку
- * economy.ts о том, почему торгующие этого права не имеют).
+ * ЧТЕНИЕ ВИТРИНЫ обслуживает рынок (`runMarketMaintenance`: разбор зависших лотов +
+ * пересчёт коридоров) — иначе «оплата обрабатывается» превратилось бы в вечное
+ * состояние, а «живая экономика» осталась бы таблицей из конфига. С появлением
+ * фонового цикла (backlog 4) это перестало быть ЕДИНСТВЕННЫМ моментом, когда рынок
+ * доделывается, но читать витрину по-прежнему нужно разобранным: игрок, нажавший
+ * «обновить», обязан видеть мир после разбора, а не до него. Порядок и логи общие с
+ * циклом намеренно — одна функция на обоих путях.
  */
 export function registerMarketRoutes(app: FastifyInstance, ctx: AppContext): void {
   const auth = { preHandler: authHook(ctx) };
-  const deps = {
-    users: ctx.users,
-    lots: ctx.lots,
-    commodities: ctx.commodities,
-    ledger: ctx.ledger,
-    idFactory: ctx.idFactory,
-    onError: (error: Error, context: Record<string, unknown>) =>
-      ctx.logger.error('market_commit_cleanup_failed', { error: error.message, ...context })
-  };
+  // Зависимости протоколов собираются один раз в контексте процесса: тот же объект
+  // идёт и в фоновый цикл, иначе reconcile из цикла и reconcile из маршрута имели бы
+  // разные права на объявление продажи (marketDeps.onSold) — то есть пуш зависел бы от
+  // того, кто первым доделал лот.
+  const deps = ctx.marketDeps;
   const config = ctx.config.economy;
 
   app.get('/v1/market', auth, async (request) => {
     const now = ctx.now();
     const account = await accountOf(ctx, request);
-    await reconcileMarket(deps, now);
-    const report = await repriceMarket(deps, now);
-    if (report.moved.length > 0) {
-      // Единственный след пересчёта в логах: по нему видно, что коридоры двигаются
-      // и какие виды. Молча поменявшиеся цены — это инцидент поддержки, а не фича.
-      ctx.logger.info('market_repriced', {
-        moved: report.moved.map((m) => `${m.junk}:${m.factorFrom}→${m.factorTo}`),
-        paused: report.paused
-      });
-    }
+    await runMarketMaintenance(deps, now, ctx.logger);
     const [lots, commodities] = await Promise.all([
       ctx.lots.listActive({ limit: MARKET_FEED_LIMIT }),
       ctx.commodities.list()

@@ -37,6 +37,29 @@ export interface VkConfig {
   initDataSourceTtlSec: number;
 }
 
+export interface NotificationsConfig {
+  push: {
+    enabled: boolean;
+    endpoint: string;
+    apiVersion: string;
+    timeoutMs: number;
+  };
+  /** Потолок очереди: рынок может породить фактов быстрее, чем ВК их пропустит. */
+  queueCapacity: number;
+  /** Повторы при временном отказе площадки (429/5xx/таймаут), сверх первого похода. */
+  retryAttempts: number;
+  /** Пауза между проходами очереди уведомлений. */
+  drainIntervalMs: number;
+}
+
+export interface MarketRuntimeConfig {
+  worker: {
+    enabled: boolean;
+    /** Пауза между проходами обслуживания рынка: разбор зависших лотов + пересчёт коридоров. */
+    intervalMs: number;
+  };
+}
+
 export interface EconomyConfig {
   /** Кап энергии (п.2.3). */
   energyCap: number;
@@ -65,6 +88,8 @@ export interface AppConfig {
   jwt: { secret: string; ttlSec: number };
   allowedOrigins: string[];
   vk: VkConfig;
+  notifications: NotificationsConfig;
+  market: MarketRuntimeConfig;
   tg: { botToken: string | null };
   economy: EconomyConfig;
   /** POST /v1/dev/vk/sign разрешён только вне production и при явном флаге. */
@@ -86,6 +111,22 @@ const envSchema = z.object({
   VK_APP_ID: z.coerce.number().int().nonnegative().default(0),
   VK_SECRET_KEY: z.string().default(''),
   VK_INIT_DATA_SOURCE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * VK Push (Часть 2, backlog 3). Выключен по умолчанию осознанно: `secure.sendNotification`
+   * требует права на метод у приложения, и на неподготовленном ключе каждый пуш вернёт 6.13.2.
+   * Молча включающий продажи уведомлений конфиг был бы хуже, чем явный флаг.
+   */
+  VK_PUSH_ENABLED: z.enum(['true', 'false']).default('false'),
+  VK_PUSH_ENDPOINT: z.string().url().default('https://api.vk.com/method/secure.sendNotification'),
+  VK_PUSH_API_VERSION: z.string().min(1).default('5.199'),
+  VK_PUSH_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(3000),
+  /** Очередь уведомлений: потолок накопления и число повторов при временном отказе ВК. */
+  NOTICE_QUEUE_CAPACITY: z.coerce.number().int().positive().max(10_000).default(500),
+  NOTICE_RETRY_ATTEMPTS: z.coerce.number().int().nonnegative().max(5).default(2),
+  NOTICE_DRAIN_INTERVAL_MS: z.coerce.number().int().positive().max(60_000).default(5000),
+  /** Фоновое обслуживание рынка (Часть 2, backlog 4). */
+  MARKET_WORKER_ENABLED: z.enum(['true', 'false']).default('true'),
+  MARKET_WORKER_INTERVAL_MS: z.coerce.number().int().positive().max(3_600_000).default(60_000),
   TG_BOT_TOKEN: z.string().default(''),
   ENERGY_CAP: z.coerce.number().int().positive().default(100),
   ENERGY_REGEN_PER_HOUR: z.coerce.number().nonnegative().default(5),
@@ -143,6 +184,12 @@ function requireProductionRules(raw: z.infer<typeof envSchema>, source: NodeJS.P
   if (raw.PAYMENTS_ENABLED === 'true' && !raw.VK_SECRET_KEY) {
     problems.push('PAYMENTS_ENABLED=true требует VK_SECRET_KEY');
   }
+  // Пуш без ключей — это не «тихо не работает», а гарантированные 6.13.2/113 на каждой
+  // продаже и пустой лог вместо объяснения, почему игрок не узнал о деньгах.
+  if (raw.VK_PUSH_ENABLED === 'true') {
+    if (raw.VK_APP_ID <= 0) problems.push('VK_PUSH_ENABLED=true требует VK_APP_ID');
+    if (!raw.VK_SECRET_KEY) problems.push('VK_PUSH_ENABLED=true требует VK_SECRET_KEY');
+  }
   if (raw.DEV_SIGNER_ENABLED === 'true') problems.push('DEV_SIGNER_ENABLED запрещён в production');
 
   if (problems.length > 0) {
@@ -190,6 +237,23 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       appId: raw.VK_APP_ID,
       secretKey: raw.VK_SECRET_KEY,
       initDataSourceTtlSec: raw.VK_INIT_DATA_SOURCE_TTL_SECONDS
+    },
+    notifications: {
+      push: {
+        enabled: raw.VK_PUSH_ENABLED === 'true',
+        endpoint: raw.VK_PUSH_ENDPOINT,
+        apiVersion: raw.VK_PUSH_API_VERSION,
+        timeoutMs: raw.VK_PUSH_TIMEOUT_MS
+      },
+      queueCapacity: raw.NOTICE_QUEUE_CAPACITY,
+      retryAttempts: raw.NOTICE_RETRY_ATTEMPTS,
+      drainIntervalMs: raw.NOTICE_DRAIN_INTERVAL_MS
+    },
+    market: {
+      worker: {
+        enabled: raw.MARKET_WORKER_ENABLED === 'true',
+        intervalMs: raw.MARKET_WORKER_INTERVAL_MS
+      }
     },
     tg: { botToken: raw.TG_BOT_TOKEN.length > 0 ? raw.TG_BOT_TOKEN : null },
     economy: {

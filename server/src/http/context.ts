@@ -18,6 +18,10 @@ import type { LotStore } from '../modules/market/lot.store.js';
 import { MemoryCommodityStore } from '../modules/market/commodity.store.js';
 import { MongoCommodityStore } from '../modules/market/commodity.mongo.js';
 import type { CommodityStore } from '../modules/market/commodity.store.js';
+import type { MarketDeps } from '../modules/market/commit.js';
+import { createMarketMaintenanceLoop } from '../modules/market/maintenance.js';
+import { createNoticeOutbox, type NoticeOutbox } from '../modules/notification/outbox.js';
+import type { Loop } from '../lib/scheduler.js';
 
 /**
  * Сборка зависимостей процесса: конфиг → сторы → журнал → токены → логгер.
@@ -45,12 +49,37 @@ export interface AppContext {
    */
   readonly commodities: CommodityStore;
   readonly ledger: LedgerStore;
+  /**
+   * Зависимости протоколов рынка (Часть 2). Объект ОДИН на HTTP-маршруты и на фоновый
+   * цикл: у него есть `onSold`, и два разных набора означали бы, что право объявить
+   * продажу зависит от того, кто доделал лот — игрок своим запросом витрины или воркер.
+   */
+  readonly marketDeps: MarketDeps;
+  /**
+   * Очередь VK Push (Часть 2, backlog 3). Живёт в контексте, потому что переживает
+   * любой отдельный запрос: пуш о продаже уходит игроку, которого в этот момент
+   * в игре нет.
+   */
+  readonly notices: NoticeOutbox;
+  /**
+   * Фоновый цикл обслуживания рынка (Часть 2, backlog 4). Создан, но НЕ запущен:
+   * `startWorkers()` вызывает только `index.ts`, тесты же получают контекст без
+   * таймеров — иначе каждый прогон vitest ловил бы гонку цикла с собственными
+   * ассертами.
+   */
+  readonly marketWorker: Loop;
   readonly tokens: TokenService;
   readonly logger: Logger;
   /** Идентификаторы записей журнала и доменов. В проде — UUID; в тестах — свой. */
   readonly idFactory: () => string;
   /** Часы процесса. Одна точка, чтобы подменять время в тестах. */
   now(): Date;
+  /**
+   * Запуск фоновых циклов (обслуживание рынка, очередь пушей). Делает только
+   * `index.ts` — после `connect()` и `listen()`. Тесты не вызывают: им нужны
+   * детерминированные проходы через `marketWorker.tick()` и `notices.drain()`.
+   */
+  startWorkers(): void;
   connect(): Promise<void>;
   close(): Promise<void>;
 }
@@ -98,6 +127,47 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
         }
       : buildStores(config, logger);
 
+  const idFactory = overrides.idFactory ?? (() => randomUUID());
+  const now = overrides.now ?? (() => new Date());
+
+  const notices: NoticeOutbox = createNoticeOutbox({
+    push: {
+      appId: config.vk.appId,
+      secretKey: config.vk.secretKey,
+      endpoint: config.notifications.push.endpoint,
+      apiVersion: config.notifications.push.apiVersion,
+      timeoutMs: config.notifications.push.timeoutMs
+    },
+    policy: {
+      enabled: config.notifications.push.enabled,
+      capacity: config.notifications.queueCapacity,
+      attempts: config.notifications.retryAttempts,
+      drainIntervalMs: config.notifications.drainIntervalMs
+    },
+    logger
+  });
+
+  // Единая сборка зависимостей рынка: протоколы (маршруты) и фоновый цикл видят один
+  // и тот же объект, включая `onSold`. Разделить их — значит получить два разных
+  // правила на объявление продажи.
+  const marketDeps: MarketDeps = {
+    users: stores.users,
+    lots: stores.lots,
+    commodities: stores.commodities,
+    ledger: stores.ledger,
+    idFactory,
+    onError: (error, context) =>
+      logger.error('market_commit_cleanup_failed', { error: error.message, ...context }),
+    onSold: (event) => {
+      notices.enqueue(event);
+    }
+  };
+
+  const marketWorker = createMarketMaintenanceLoop(marketDeps, logger, {
+    intervalMs: config.market.worker.intervalMs,
+    now
+  });
+
   const context: AppContext = {
     config,
     users: stores.users,
@@ -105,12 +175,26 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
     lots: stores.lots,
     commodities: stores.commodities,
     ledger: stores.ledger,
+    marketDeps,
+    notices,
+    marketWorker,
     tokens:
       overrides.tokens ??
       new TokenService({ secret: config.jwt.secret, ttlSec: config.jwt.ttlSec }),
     logger,
-    idFactory: overrides.idFactory ?? (() => randomUUID()),
-    now: overrides.now ?? (() => new Date()),
+    idFactory,
+    now,
+    startWorkers(): void {
+      // Порядок не важен, но смысл один: циклы стартуют после `connect()`, иначе
+      // первый тик может прийти в ещё не поднятый стор.
+      if (config.market.worker.enabled) marketWorker.start();
+      notices.start();
+      logger.info('workers_started', {
+        market_worker: config.market.worker.enabled,
+        market_interval_ms: config.market.worker.intervalMs,
+        push: notices.readiness()
+      });
+    },
     async connect(): Promise<void> {
       // Порядок не важен: коллекции создаёт сам mongoose при первом обращении.
       await Promise.all([
@@ -122,6 +206,11 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
       ]);
     },
     async close(): Promise<void> {
+      // Сначала циклы, потом соединения: остановка дожидается идущего прохода, и
+      // рвать его посередине закрытого Mongo — значит оставить рынок с половиной
+      // протокола. Очередь пушей при этом честно теряет недоставанное с записью
+      // `notice_lost_on_stop`.
+      await Promise.all([marketWorker.stop(), notices.stop()]);
       await Promise.all([
         stores.users.disconnect(),
         stores.clans.disconnect(),

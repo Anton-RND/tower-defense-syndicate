@@ -6,6 +6,7 @@ import { makeIdempotencyKey, type LedgerDraft } from '../ledger/ledger.types.js'
 import type { LedgerStore } from '../ledger/ledger.store.js';
 import type { UserAccount } from '../user/user.types.js';
 import type { UserStore } from '../user/user.store.js';
+import type { LotSoldEvent } from '../notification/notice.types.js';
 import type { LotState } from './lot.types.js';
 import type { LotStore } from './lot.store.js';
 import type { CommodityStore } from './commodity.store.js';
@@ -64,6 +65,20 @@ export interface MarketDeps {
   idFactory: () => string;
   /** Звонок провала компенсационного шага: сигнал для фоновой помощи, а не тихая потеря. */
   onError?: (error: Error, context: Record<string, unknown>) => void;
+  /**
+   * Факт «лот продан и продавец получил деньги» (Часть 2, backlog 3).
+   *
+   * Звонится РОВНО ОДИН РАЗ НА ЛОТ и только тому, кто реально записал выплату в
+   * журнал. Вызывать уведомление из маршрута было бы неправильно: маршрут не знает,
+   * довелась ли выплата — он знает только, что вернулся ответ `buyLot`. А reconcile
+   * доводит деньги молча, без всякого запроса игрока, и пуш обязан уйти тоже там.
+   *
+   * Колбэк обязан быть быстрым и не бросать: он вызывается ПОСЛЕ того, как деньги
+   * разведены, и его падение не имеет права превратить завершённую сделку в ошибку
+   * 500. Маршрут кладёт событие в очередь (`outbox.enqueue`) — это синхронная
+   * операция над массивом. На всякий случай звонок обёрнут в try/catch ниже.
+   */
+  onSold?: (event: LotSoldEvent) => void;
 }
 
 /**
@@ -78,9 +93,57 @@ export interface MarketDeps {
  * первичного ключа в Mongo, и домен, генерирующий его сам, перестал бы быть
  * чистым и стал бы невоспроизводимым в тестах.
  */
-async function commitDrafts(deps: MarketDeps, drafts: LedgerDraft[]): Promise<void> {
-  if (drafts.length === 0) return;
-  await deps.ledger.appendMany(drafts.map((draft) => ({ ...draft, id: deps.idFactory() })));
+async function commitDrafts(
+  deps: MarketDeps,
+  drafts: LedgerDraft[],
+  context: Record<string, unknown>
+): Promise<number> {
+  if (drafts.length === 0) return 0;
+  const written = await deps.ledger.appendMany(drafts.map((draft) => ({ ...draft, id: deps.idFactory() })));
+  if (written < drafts.length) {
+    // Движение отброшено уникальным ключом: кто-то уже записал ЭТОТ факт. Для рынка
+    // это не косметика — именно по числу записанных строк решается, кому принадлежит
+    // право объявить продажу (см. `emitSold`), и молчаливый возврат здесь означал бы,
+    // что два победителя получили по одному и тому же лоту.
+    deps.onError?.(
+      new Error(`Журнал рынка: ${drafts.length - written} из ${drafts.length} движений отброшены как дубликаты`),
+      { ...context, stage: 'ledger_duplicate' }
+    );
+  }
+  return written;
+}
+
+/** Факт продажи для уведомлений: собирается из лота и счёта продавца, без чтения сторов. */
+function soldEvent(lot: LotState, seller: UserAccount, buyerId: string | null, net: number, now: Date): LotSoldEvent {
+  return {
+    lotId: lot.id,
+    sellerId: seller.id,
+    sellerPlatform: seller.platform,
+    sellerSocialId: seller.socialId,
+    buyerId,
+    junk: lot.junk,
+    amount: lot.amount,
+    grossSec: lot.total,
+    netSec: net,
+    at: now
+  };
+}
+
+/**
+ * Объявить продажу.
+ *
+ * Изолировано намеренно: к этому моменту деньги уже разведены, и падение подписчика
+ * (очереди пушей, будущего аналитика) не имеет права превратить завершённую сделку
+ * в 500 для покупателя. Провал уведомляем через `onError` — тот же канал, что у
+ * остальных компенсационных шагов протокола.
+ */
+function emitSold(deps: MarketDeps, event: LotSoldEvent, context: Record<string, unknown>): void {
+  if (!deps.onSold) return;
+  try {
+    deps.onSold(event);
+  } catch (error) {
+    deps.onError?.(error instanceof Error ? error : new Error(String(error)), { ...context, stage: 'on_sold' });
+  }
 }
 
 function notFound(message: string): AppError {
@@ -131,7 +194,7 @@ export async function listLot(
       captured.push({ account: escrow.account, drafts: [escrow.draft] });
       return escrow.account;
     });
-    await commitDrafts(deps, captured[captured.length - 1]?.drafts ?? []);
+    await commitDrafts(deps, captured[captured.length - 1]?.drafts ?? [], { lotId, sellerId, stage: 'escrow' });
 
     // Шаг 3: витрина.
     const lot = await deps.lots.transact(lotId, (current) => activateLot(current, now));
@@ -154,7 +217,7 @@ export async function listLot(
             captured.push({ account: back.account, drafts: back.drafts });
             return back.account;
           });
-          await commitDrafts(deps, captured[captured.length - 1]?.drafts ?? []);
+          await commitDrafts(deps, captured[captured.length - 1]?.drafts ?? [], { lotId, sellerId, stage: 'return' });
           void restored;
         }
       }
@@ -240,7 +303,7 @@ export async function buyLot(
       captured.push(side.drafts);
       return side.account;
     });
-    await commitDrafts(deps, captured[captured.length - 1] ?? []);
+    await commitDrafts(deps, captured[captured.length - 1] ?? [], { lotId, buyerId, stage: 'trade' });
   } catch (error) {
     // Товар размораживается: иначе отказ по чужому переполненному складу навсегда
     // снял бы лот с рынка. `unclaimLot` идемпотентен и CAS-повтору не вредит.
@@ -265,8 +328,13 @@ export async function buyLot(
       payouts.push(movement.drafts);
       return movement.account;
     });
-    await commitDrafts(deps, payouts[payouts.length - 1] ?? []);
+    const written = await commitDrafts(deps, payouts[payouts.length - 1] ?? [], { lotId, buyerId, stage: 'payout' });
     const lot = await deps.lots.transact(lotId, (current) => markPaid(current, now));
+    // Право объявить продажу — у того, кто записал выплату. `written === 0` значит,
+    // что ключ `market:<лот>:payout` занял другой участник гонки (обычно это reconcile,
+    // догнавший упавший между шагами buyLot), и вторым пушем мы бы просто наступили
+    // на чужие уже отправленные деньги.
+    if (written > 0) emitSold(deps, soldEvent(lot, seller, buyerId, net, now), { lotId, stage: 'payout' });
     return { lot, buyer, seller, settled: true };
   } catch (error) {
     // Худший из допустимых исходов: покупатель заплатил, продавец не получил.
@@ -313,7 +381,7 @@ export async function cancelLot(
     captured.push(back.drafts);
     return back.account;
   });
-  await commitDrafts(deps, captured[captured.length - 1] ?? []);
+  await commitDrafts(deps, captured[captured.length - 1] ?? [], { lotId, stage: 'return' });
   return { lot: released, account };
 }
 
@@ -366,7 +434,7 @@ export async function reconcileMarket(
       captured.push(back.drafts);
       return back.account;
     });
-    await commitDrafts(deps, captured[captured.length - 1] ?? []);
+    await commitDrafts(deps, captured[captured.length - 1] ?? [], { lotId: lot.id, stage: 'return' });
     result.expired += 1;
   }
 
@@ -381,16 +449,36 @@ export async function reconcileMarket(
       await deps.lots.transact(lot.id, (current) => unclaimLot(current, now));
       continue;
     }
+    // Доказательство того, что деньги продавцу УЖЕ доведены, — запись выплаты в
+    // журнале, а не флаг лота. Без этой проверки второй участник гонки (reconcile,
+    // догнавший buyLot, упавший между журналом и отметкой лота) зачислил бы продавцу
+    // сумму повторно: журнал отсекает ДВИЖЕНИЕ по уникальному ключу, а изменение
+    // счёта игрока — нет, и `users.transact` послушно применяет редуктор к свежему
+    // документу. Окно между этим `hasKey` и записью остаётся — закрывается оно только
+    // транзакционным хранилищем (см. шапку user.store.ts про Шаг 6), здесь мы делаем
+    // его настолько малым, насколько позволяет чтение одного документа.
+    if (await deps.ledger.hasKey(makeIdempotencyKey('market', `${lot.id}:payout`))) {
+      await deps.lots.transact(lot.id, (current) => markPaid(current, now));
+      continue;
+    }
     const net = lotNet(lot);
     const captured: LedgerDraft[][] = [];
-    await deps.users.transact(lot.sellerId, (current) => {
+    const seller = await deps.users.transact(lot.sellerId, (current) => {
       const movement = paySeller(current, lot, net, now);
       captured.push(movement.drafts);
       return movement.account;
     });
-    await commitDrafts(deps, captured[captured.length - 1] ?? []);
-    await deps.lots.transact(lot.id, (current) => markPaid(current, now));
-    result.paidOut += 1;
+    const written = await commitDrafts(deps, captured[captured.length - 1] ?? [], {
+      lotId: lot.id,
+      stage: 'payout'
+    });
+    const settled = await deps.lots.transact(lot.id, (current) => markPaid(current, now));
+    if (written > 0) {
+      result.paidOut += 1;
+      // Продажа, доведённая фоном, — ровно тот случай, когда продавца нет в игре
+      // (иначе он бы увидел это сам и не ждал). Пуш здесь нужнее, чем в buyLot.
+      emitSold(deps, soldEvent(settled, seller, lot.buyerId, net, now), { lotId: lot.id, stage: 'payout' });
+    }
   }
 
   return result;

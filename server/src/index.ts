@@ -17,6 +17,9 @@ async function main(): Promise<void> {
 
   const app = await buildApp(ctx);
   await app.listen({ host: ctx.config.host, port: ctx.config.port });
+  // Циклы — ПОСЛЕ открытия порта: сторы уже подняты, а медленный старт воркера не
+  // имеет права задерживать готовность процесса (пробка оркестратора смотрит на /health).
+  ctx.startWorkers();
 
   ctx.logger.info('server_started', {
     env: ctx.config.env,
@@ -27,6 +30,8 @@ async function main(): Promise<void> {
     payments: ctx.config.economy.limits.purchases.enabled,
     ads: ctx.config.economy.limits.ads.enabled,
     dev: ctx.config.devSignerEnabled,
+    market_worker: ctx.config.market.worker.enabled,
+    push: ctx.notices.readiness(),
     debug_page: `http://localhost:${ctx.config.port}/debug`
   });
 
