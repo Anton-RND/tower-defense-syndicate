@@ -315,7 +315,7 @@ function renderWallet() {
     // поэтому `secSpendable` — то целое, которое разрешено потратить.
     chip('SEC', eco.resources.secSpendable, '+' + fmtNum(eco.power.secPerHour) + '/ч'),
     chip('астерий', eco.asterium.total, 'купл./зараб. ' + eco.asterium.purchased + '/' + eco.asterium.earned),
-    chip('хроний', eco.materials.chronium),
+    chip('хрониум', eco.materials.chronium),
     chip('вольфрам', eco.materials.wolfram),
     chip('станиум', eco.materials.stanium),
     chip('металлы', eco.metals.black_metal + '/' + eco.metals.colored_metal + '/' + eco.metals.precious_metal, 'ч/ц/д'),
@@ -2210,8 +2210,8 @@ function renderShop() {
     '<div class="muted" id="bpCost" style="margin-bottom:8px"></div>' +
     queue +
     '<div class="row" style="margin-top:8px"><button onclick="TD.speedupAll()">Ускорить всё' +
-    (all.cost != null ? ' (' + all.cost + ' хроний)' : '') + '</button>' +
-    '<span class="pill">' + eco.materials.chronium + ' хроний</span></div>' +
+    (all.cost != null ? ' (' + all.cost + ' хрониум)' : '') + '</button>' +
+    '<span class="pill">' + eco.materials.chronium + ' хрониум</span></div>' +
     '<p class="hint">Слоты строителя: ' + builders.free + ' свободен(о), следующий слот ' +
     (builders.nextPrice == null ? 'не продаётся' : builders.nextPrice + ' астерия') + '.</p>';
 
@@ -3176,14 +3176,14 @@ const TD = {
   speedup(jobId) {
     return act('ускорение', async function () {
       const result = await api('POST', '/v1/workshop/build/' + encodeURIComponent(jobId) + '/speedup', {});
-      log('ускорено на ' + fmtMs(result.result.savedMs) + ' · ' + result.result.cost + ' хроний', 'ok');
+      log('ускорено на ' + fmtMs(result.result.savedMs) + ' · ' + result.result.cost + ' хрониум', 'ok');
     });
   },
 
   speedupAll() {
     return act('ускорить всё', async function () {
       const result = await api('POST', '/v1/workshop/build/speedup-all', {});
-      log('очередь ускорена: ' + result.result.count + ' работ(ы) · ' + result.result.cost + ' хроний', 'ok');
+      log('очередь ускорена: ' + result.result.count + ' работ(ы) · ' + result.result.cost + ' хрониум', 'ok');
     });
   },
 
