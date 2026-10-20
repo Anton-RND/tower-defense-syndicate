@@ -1,0 +1,21 @@
+{
+  "name": "tower-defense-syndicate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tower Defense Syndicate (TDS) — индастриал tower defense во ВКонтакте: добыча и переработка, лабиринт своими руками, асинхронные PvP-рейды по рейтингу и кланы с общей казной. Копай. Добывай. Держи осаду.",
+  "workspaces": [
+    "server"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace server",
+    "build": "npm run build --workspace server",
+    "typecheck": "npm run typecheck --workspace server",
+    "typecheck:frontend": "tsc -p frontend/tsconfig.json --noEmit",
+    "test": "npm run test --workspace server",
+    "vk:doctor": "npm run vk:doctor --workspace server",
+    "copy:check": "node _copy_check.mjs"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  }
+}

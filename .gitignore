@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.env.*.local
+coverage/
+.tmp/
+.net.txt
+.envcheck.txt
+# Артефакты диагностических прогонов (смоук, tsc, vitest, err-поток dev-сервера).
+*.out
+server.err
+# Вывод временных проверок, пишется на диск, потому что терминал Windows не всегда
+# стримит stdout. Сами проверки — исключение из этого правила: _copy_check.mjs
+# отслеживается намеренно, на него ссылается `npm run copy:check` и VK_CATALOG.md.
+_*.txt

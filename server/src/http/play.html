@@ -1,0 +1,3341 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TDS · полигон</title>
+<style>
+  :root {
+    --bg: #0d1015; --panel: #151a22; --panel2: #1b2129; --line: #262e39;
+    --text: #d7dee8; --muted: #8494a8; --accent: #4ea1ff; --ok: #4ec27a;
+    --warn: #e6b24a; --err: #e2685f; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--mono); }
+  header {
+    position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px;
+    align-items: center; padding: 10px 14px; background: var(--panel2); border-bottom: 1px solid var(--line);
+  }
+  .brand { font-weight: 700; letter-spacing: .5px; }
+  .brand span { color: var(--accent); font-weight: 400; }
+  header .spacer { flex: 1; }
+  input, select, button { font: inherit; color: inherit; }
+  input, select { background: #0f141b; border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+  input[type=number] { width: 72px; }
+  button { background: #22303f; border: 1px solid #33465c; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  button:hover { background: #2c3f53; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.on { background: #1e3527; border-color: #2f6b45; color: #9ae8bb; }
+  button.err { background: #3a2220; border-color: #6b2f2a; }
+  a.link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  .wallet { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; white-space: nowrap; }
+  .chip b { color: var(--accent); }
+  .chip.neg b { color: var(--err); }
+  .chip small { color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(540px, 1fr) minmax(330px, 400px); gap: 12px; padding: 12px 14px 40px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; margin-bottom: 12px; }
+  .panel > h2 {
+    margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel > h2 .tag { color: var(--accent); text-transform: none; letter-spacing: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num, th.num { text-align: right; }
+  .list { max-height: 230px; overflow: auto; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  .hint { color: var(--muted); font-size: 11px; margin: 4px 0 0; }
+  #board { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+  #toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  #viewbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  #viewbar button { padding: 3px 8px; font-size: 12px; }
+  #cvWrap { display: flex; justify-content: center; }
+  canvas { background: #080b0f; border: 1px solid var(--line); border-radius: 4px; touch-action: none; max-width: 100%; }
+  #analysis { margin-top: 8px; font-size: 12px; }
+  #replay { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+  #rpScrub { width: 100%; padding: 0; }
+  #rpEvents { max-height: 120px; overflow: auto; font-size: 11px; color: var(--muted); margin-top: 6px; white-space: pre-wrap; }
+  #log {
+    background: #080b0f; border: 1px solid var(--line); border-radius: 6px; margin-top: 6px;
+    padding: 8px; height: 170px; overflow: auto; font-size: 11px; white-space: pre-wrap; word-break: break-word;
+  }
+  .pill { border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; font-size: 11px; color: var(--muted); }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand" title="Tower Defense Syndicate">TDS <span>полигон</span></div>
+  <input id="socialId" placeholder="socialId" value="1">
+  <button id="btnLogin">Войти</button>
+  <button id="btnRefresh">Обновить</button>
+  <a class="link" href="/debug">стенд</a>
+  <div class="spacer"></div>
+  <span id="who" class="muted">не вошёл</span>
+</header>
+
+<div class="wallet" id="wallet"><span class="muted">войдите, чтобы увидеть кошелёк</span></div>
+
+<main>
+  <section id="board">
+    <div id="toolbar">
+      <button data-tool="inspect" class="on">Осмотр</button>
+      <button data-tool="wall">Стена</button>
+      <button data-tool="tower">Башня</button>
+      <button data-tool="hq">Штаб</button>
+      <button data-tool="erase" class="err">Снести</button>
+      <div class="spacer"></div>
+      <span class="pill" id="pickHint">ЛКМ — поставить, ПКМ — убрать</span>
+    </div>
+
+    <div id="viewbar">
+      <span class="muted">слои:</span>
+      <button id="viewStyle" title="Векторная графика / плоская схема (диагностика)">Арт</button>
+      <button id="viewGrid" class="on" title="Сетка клеток">Сетка</button>
+      <button id="viewRanges" title="Радиусы башен и дронов">Радиусы</button>
+      <button id="viewAnim" class="on" title="Частицы, дым, вращение винтов">Анимация</button>
+    </div>
+
+    <div id="cvWrap"><canvas id="cv" width="536" height="536"></canvas></div>
+    <div id="analysis" class="muted">войдите, чтобы увидеть поле</div>
+
+    <div id="replay">
+      <div class="row">
+        <b class="muted" style="font-size:12px;letter-spacing:.8px">РЕПЛЕЙ БОЯ</b>
+        <button id="rpPlay" disabled>&#9654; Играть</button>
+        <button id="rpBack" disabled>&#9198;</button>
+        <button id="rpRate" disabled>1&times;</button>
+        <span class="pill" id="rpClock">&mdash;</span>
+      </div>
+      <input id="rpScrub" type="range" min="0" max="0" value="0" step="1" disabled>
+      <div id="rpEvents" class="muted">Сыграйте рейд в панели PvP справа: сервер отдаёт кадры боя, и они проигрываются здесь.</div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="panel"><h2>Планировка <span class="tag" id="baseTag">&mdash;</span></h2><div id="baseBody" class="muted">&mdash;</div></div>
+    <div class="panel"><h2>Инвентарь <span class="tag" id="invTag">0</span></h2><div id="invBody" class="list muted">&mdash;</div></div>
+    <div class="panel"><h2>Мастерская <span class="tag" id="shopTag">0/0</span></h2><div id="shopBody">&mdash;</div></div>
+    <div class="panel"><h2>Экономика <span class="tag" id="ecoTag">&mdash;</span></h2><div id="ecoBody">&mdash;</div></div>
+    <div class="panel"><h2>Энергосеть <span class="tag" id="pwrTag">&mdash;</span></h2><div id="pwrBody" class="muted">&mdash;</div></div>
+    <div class="panel"><h2>Оборона <span class="tag" id="defTag">&mdash;</span></h2><div id="defBody">&mdash;</div></div>
+    <div class="panel"><h2>PvP <span class="tag" id="pvpTag">&mdash;</span></h2><div id="pvpBody">&mdash;</div></div>
+    <div class="panel"><h2>Журнал</h2><div id="log"></div></div>
+  </aside>
+</main>
+
+<script>
+'use strict';
+/*
+ * Полигон: первый слой отрисовки игры.
+ *
+ * Принципы, унаследованные от сервера (нарушение любого превращает стенд во второй
+ * источник правды):
+ *
+ *   1. Клиент НЕ считает баланс. Геометрия поля приходит из `GET /v1/config`
+ *      (base/pvp), планировка — из `economy.base` в каждом ответе API, боевые цифры —
+ *      из ответа рейда. Единственная локальная математика — BFS-поле расстояний,
+ *      дословно повторяющее `analyzeLayout` из server/src/modules/pvp/grid.ts, и
+ *      только для предпросмотра: окончательный вердикт выносит сервер на
+ *      `PUT /v1/base/layout`.
+ *   2. Реплей строится из `battle.timeline` — серверных кадров событий. Сервер
+ *      намеренно не отдаёт позиции каждой машины каждый тик (потолок 400 кадров),
+ *      поэтому там, где данных нет, интерфейс говорит об этом текстом, а не
+ *      дорисовывает выдуманное.
+ *   3. Никакой сборки и никаких зависимостей: один файл, vanilla JS, fetch.
+ */
+
+const TOKEN_KEY = 'td.play.token';
+const SID_KEY = 'td.play.sid';
+
+const S = {
+  token: null,
+  cfg: null,          // GET /v1/config
+  snap: null,         // { user, economy } последнего ответа API
+  draft: null,        // редактируемый снимок планировки
+  dirty: false,       // есть несохранённые правки
+  tool: 'inspect',
+  picked: null,       // itemId башни, выбранной для установки
+  hover: null,        // {x, y} под курсором
+  blueprints: null,   // GET /v1/workshop/blueprints
+  opponent: null,     // GET /v1/pvp/opponent
+  armySel: {},        // itemId -> true (состав рейда)
+  replay: null        // состояние проигрывателя боя
+};
+
+const $ = (id) => document.getElementById(id);
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+}
+
+function clock() {
+  return new Date().toLocaleTimeString('ru-RU', { hour12: false });
+}
+
+/** Журнал внизу: то, что читает игрок, когда кнопка «не сработала». */
+function log(message, cls) {
+  const box = $('log');
+  const line = document.createElement('div');
+  line.className = cls || '';
+  line.textContent = '[' + clock() + '] ' + message;
+  box.appendChild(line);
+  while (box.childElementCount > 200) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+}
+
+function fmtNum(value) {
+  const n = Number(value ?? 0);
+  return Math.abs(n) >= 1000 ? Math.round(n).toLocaleString('ru-RU') : String(Math.round(n * 100) / 100);
+}
+
+function fmtMs(ms) {
+  const total = Math.max(0, Math.floor(Number(ms) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0 ? h + 'ч ' + m + 'м' : m > 0 ? m + 'м ' + s + 'с' : s + 'с';
+}
+
+// ─── Транспорт ───────────────────────────────────────────────────────────────
+
+/**
+ * Единый запрос. Любое успешное состояние сервера приходит в ответе целиком
+ * (`{user, economy}`), поэтому снимок обновляем здесь, а не в каждом обработчике:
+ * рассинхрона «кнопка нажала, кошелёк не обновился» просто не существует.
+ */
+async function api(method, path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (S.token) headers.Authorization = 'Bearer ' + S.token;
+  const response = await fetch(path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || !payload || payload.error) {
+    const message = payload && payload.error ? payload.error.message : response.status + ' ' + response.statusText;
+    const details = payload && payload.error && payload.error.details;
+    throw new Error(message + (details ? ' · ' + JSON.stringify(details) : ''));
+  }
+  if (payload.user && payload.economy) adoptView(payload);
+  return payload;
+}
+
+function adoptView(view) {
+  S.snap = view;
+  if (!S.dirty) syncDraftFromView();
+  renderAll();
+}
+
+/** Черновик планировки — из серверного снимка, без малейшей местной математики. */
+function syncDraftFromView() {
+  const base = S.snap && S.snap.economy && S.snap.economy.base;
+  if (!base) { S.draft = null; return; }
+  S.draft = {
+    version: base.version,
+    hq: { x: base.hq.x, y: base.hq.y },
+    walls: base.walls.map((cell) => ({ x: cell.x, y: cell.y })),
+    units: base.units.map((unit) => ({ itemId: unit.itemId, x: unit.x, y: unit.y }))
+  };
+}
+
+async function login() {
+  const socialId = ($('socialId').value || '1').trim();
+  localStorage.setItem(SID_KEY, socialId);
+  try {
+    const result = await api('POST', '/v1/auth/dev-login', { socialId });
+    S.token = result.token;
+    localStorage.setItem(TOKEN_KEY, S.token);
+    log('вход: socialId=' + socialId + ' · ' + S.snap.user.id.slice(0, 8), 'ok');
+    await refresh();
+  } catch (error) {
+    log('вход не удался: ' + error.message, 'err');
+  }
+}
+
+async function refresh() {
+  if (!S.token) { log('сначала войдите', 'err'); return; }
+  try {
+    await api('GET', '/v1/economy');
+    if (!S.blueprints) await loadBlueprints();
+    renderAll();
+  } catch (error) {
+    log('обновление: ' + error.message, 'err');
+  }
+}
+
+async function loadBlueprints() {
+  S.blueprints = await api('GET', '/v1/workshop/blueprints');
+  renderShop();
+}
+
+// ─── Кошелёк ─────────────────────────────────────────────────────────────────
+
+function chip(label, value, note, cls) {
+  return '<span class="chip ' + (cls || '') + '">' + esc(label) + ' <b>' + esc(value) + '</b>' +
+    (note ? ' <small>' + esc(note) + '</small>' : '') + '</span>';
+}
+
+function renderWallet() {
+  const box = $('wallet');
+  const who = $('who');
+  if (!S.snap) {
+    box.innerHTML = '<span class="muted">войдите, чтобы увидеть кошелёк</span>';
+    who.textContent = 'не вошёл';
+    return;
+  }
+  const eco = S.snap.economy;
+  const field = eco.materials.staniumField;
+  const junkKinds = Object.values(eco.junk || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+
+  who.innerHTML = 'id ' + esc(S.snap.user.id.slice(0, 8)) + ' · rev ' + esc(S.snap.user.revision) + ' · ' +
+    (field.active ? '<span class="ok">поле ' + fmtMs(field.remainingMs) + '</span>' : 'поле выкл');
+
+  box.innerHTML = [
+    chip('⚡', eco.resources.energy + '/' + eco.energy.cap, '+' + fmtNum(eco.energy.regenPerHour) + '/ч'),
+    chip('железо', eco.resources.ferrum),
+    chip('кремний', eco.resources.silicium),
+    chip('уран', eco.resources.uranium),
+    chip('плазма', eco.resources.plasma),
+    // SEC — деньги, а не запас: набегают тиком напрямую в кошелёк, минуя цистерны.
+    // Дробный остаток показывать нельзя (витрина «12.4831 астерия» выглядит шумом),
+    // поэтому `secSpendable` — то целое, которое разрешено потратить.
+    chip('SEC', eco.resources.secSpendable, '+' + fmtNum(eco.power.secPerHour) + '/ч'),
+    chip('астерий', eco.asterium.total, 'купл./зараб. ' + eco.asterium.purchased + '/' + eco.asterium.earned),
+    chip('хроний', eco.materials.chronium),
+    chip('вольфрам', eco.materials.wolfram),
+    chip('станиум', eco.materials.stanium),
+    chip('металлы', eco.metals.black_metal + '/' + eco.metals.colored_metal + '/' + eco.metals.precious_metal, 'ч/ц/д'),
+    chip('хлам', junkKinds + '/' + eco.junkCap),
+    chip('рейтинг', eco.pvp.rating, eco.pvp.ladder.name),
+    chip('атаки', eco.pvp.attacksRemaining, 'по ' + eco.pvp.attackCost + '⚡')
+  ].join('');
+}
+
+// ─── Геометрия поля ──────────────────────────────────────────────────────────
+// Всё берётся из S.cfg.base (server/src/config/base.ts → publicBaseConfig). Размер
+// сетки, ворота и площадки штаба здесь не хардкоятся: поменяй баланс на сервере —
+// полигон на следующий день рисует новую карту.
+
+const geo = () => S.cfg.base;
+const GW = () => S.cfg.base.grid.width;
+const GH = () => S.cfg.base.grid.height;
+const cellKey = (x, y) => x + ',' + y;
+const inBounds = (x, y) => x >= 0 && y >= 0 && x < GW() && y < GH();
+const isSpawn = (x, y) => geo().spawns.some((cell) => cell.x === x && cell.y === y);
+const isHqPad = (x, y) => geo().hqPads.some((cell) => cell.x === x && cell.y === y);
+
+/** Тот же порядок соседей, что NEIGHBORS в grid.ts: вверх, вправо, вниз, влево. */
+const NEIGHBORS = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
+
+const wallCost = () => geo().wall.cost;
+const blocksUnits = () => S.cfg.base.units.blocksMovement !== false;
+
+/** Занятые клеткой объекты черновика: индекс → {kind, itemId, tier, level}. */
+function occupancy(draft) {
+  const map = new Map();
+  for (const wall of draft.walls) map.set(cellKey(wall.x, wall.y), { kind: 'wall' });
+  for (const unit of draft.units) {
+    const item = itemOf(unit.itemId);
+    map.set(cellKey(unit.x, unit.y), {
+      kind: 'unit',
+      itemId: unit.itemId,
+      name: item ? item.name : unit.itemId,
+      tier: item ? item.tier : 1,
+      level: item ? item.level : 1
+    });
+  }
+  return map;
+}
+
+function itemOf(itemId) {
+  const inventory = S.snap && S.snap.economy.inventory;
+  return inventory ? inventory.find((item) => item.id === itemId) || null : null;
+}
+
+/** Предметы, которые можно выставить на карту (виды из config/base: tower, weapon). */
+function deployable() {
+  if (!S.snap) return [];
+  const kinds = S.cfg.base.units.deployableKinds;
+  const placed = new Set((S.draft ? S.draft.units : []).map((unit) => unit.itemId));
+  return S.snap.economy.inventory.filter((item) => kinds.includes(item.kind) && !placed.has(item.id));
+}
+
+/** Дроны: виды из config/pvp (attack.kinds). */
+function drones() {
+  if (!S.snap) return [];
+  const kinds = S.cfg.pvp.attack.kinds;
+  return S.snap.economy.inventory.filter((item) => kinds.includes(item.kind));
+}
+
+// ─── Предпросмотр проходимости ───────────────────────────────────────────────
+/*
+ * Дословный пересказ analyzeLayout из server/src/modules/pvp/grid.ts: BFS от штаба
+ * (не от ворот), тот же порядок обхода соседей, те же коды нарушений и предупреждений.
+ * Нужен он только затем, чтобы редактор подсвечивал проблему ДО нажатия «Сохранить».
+ * Решает сервер: его ответ на PUT /v1/base/layout — единственный документ о том,
+ * проходит ли планировка.
+ */
+function distanceField(blocked, hqIndex, size) {
+  const w = GW();
+  const dist = new Int32Array(size).fill(-1);
+  if (hqIndex < 0 || hqIndex >= size || blocked[hqIndex] === 1) return dist;
+
+  const queue = new Int32Array(size);
+  let head = 0;
+  let tail = 0;
+  dist[hqIndex] = 0;
+  queue[tail++] = hqIndex;
+
+  while (head < tail) {
+    const current = queue[head++];
+    const currentDist = dist[current];
+    const cx = current % w;
+    const cy = Math.floor(current / w);
+    for (const offset of NEIGHBORS) {
+      const nx = cx + offset.dx;
+      const ny = cy + offset.dy;
+      if (nx < 0 || ny < 0 || nx >= GW() || ny >= GH()) continue;
+      const next = ny * w + nx;
+      if (blocked[next] === 1 || dist[next] !== -1) continue;
+      dist[next] = currentDist + 1;
+      queue[tail++] = next;
+    }
+  }
+  return dist;
+}
+
+function tracePath(dist, fromIndex) {
+  const w = GW();
+  const size = w * GH();
+  if (fromIndex < 0 || fromIndex >= size || dist[fromIndex] < 0) return null;
+  const path = [{ x: fromIndex % w, y: Math.floor(fromIndex / w) }];
+  let index = fromIndex;
+  let guard = size;
+  while (dist[index] !== 0 && guard-- > 0) {
+    const remaining = dist[index];
+    const cx = index % w;
+    const cy = Math.floor(index / w);
+    let found = -1;
+    for (const offset of NEIGHBORS) {
+      const nx = cx + offset.dx;
+      const ny = cy + offset.dy;
+      if (nx < 0 || ny < 0 || nx >= GW() || ny >= GH()) continue;
+      const candidate = ny * w + nx;
+      if (dist[candidate] === remaining - 1) { found = candidate; break; }
+    }
+    if (found < 0) return null;
+    index = found;
+    path.push({ x: index % w, y: Math.floor(index / w) });
+  }
+  return path;
+}
+
+function analyzeLayout(draft) {
+  const w = GW();
+  const size = w * GH();
+  const blocked = new Uint8Array(size);
+  const found = { overlapping_cells: false, spawn_blocked: false, hq_blocked: false, no_path: false };
+  let blockedCount = 0;
+
+  const mark = (x, y) => {
+    if (!inBounds(x, y)) return;
+    const index = y * w + x;
+    if (blocked[index] === 1) { found.overlapping_cells = true; return; }
+    blocked[index] = 1;
+    blockedCount += 1;
+  };
+
+  for (const wall of draft.walls) mark(wall.x, wall.y);
+  if (blocksUnits()) for (const unit of draft.units) mark(unit.x, unit.y);
+
+  const hqIndex = inBounds(draft.hq.x, draft.hq.y) ? draft.hq.y * w + draft.hq.x : -1;
+  if (hqIndex >= 0 && blocked[hqIndex] === 1) found.hq_blocked = true;
+
+  const spawnIndices = [];
+  for (const cell of geo().spawns) {
+    if (!inBounds(cell.x, cell.y)) continue;
+    const index = cell.y * w + cell.x;
+    if (blocked[index] === 1) found.spawn_blocked = true;
+    spawnIndices.push(index);
+  }
+  if (spawnIndices.length === 0) found.no_path = true;
+
+  const dist = distanceField(blocked, hqIndex, size);
+  const spawnDistances = spawnIndices.map((index) => dist[index]);
+  const connected = spawnDistances.filter((value) => value >= 0);
+  if (connected.length !== spawnDistances.length) found.no_path = true;
+
+  const violations = ['overlapping_cells', 'spawn_blocked', 'hq_blocked', 'no_path'].filter((code) => found[code]);
+  const ok = violations.length === 0;
+
+  let pathTiles = -1;
+  let path = null;
+  if (connected.length > 0) {
+    let worst = 0;
+    let worstIndex = -1;
+    spawnIndices.forEach((index) => {
+      if (dist[index] >= 0 && dist[index] > worst) { worst = dist[index]; worstIndex = index; }
+    });
+    pathTiles = worst;
+    if (worstIndex >= 0 && worst > 0) path = tracePath(dist, worstIndex);
+  }
+
+  let reachable = 0;
+  for (let index = 0; index < size; index += 1) if (dist[index] >= 0) reachable += 1;
+  const walkable = size - blockedCount;
+  const orphans = Math.max(0, walkable - reachable);
+
+  const warnings = [];
+  const minTiles = geo().path.minTiles;
+  if (ok && minTiles > 0 && pathTiles >= 0 && pathTiles < minTiles) warnings.push('path_too_short');
+  if (orphans > 0) warnings.push('orphan_cells');
+
+  return {
+    ok, violations, warnings, pathTiles, path, spawnDistances, walkable, reachable, orphans,
+    connectedSpawns: connected.length, totalSpawns: spawnIndices.length, dist, blocked
+  };
+}
+
+/** Тексты — те же, что describeIssue в grid.ts, чтобы игрок читал одно и то же в двух местах. */
+const ISSUE_TEXT = {
+  overlapping_cells: 'Несколько элементов заявлены на одной клетке',
+  spawn_blocked: 'Ворота роботов перекрыты — путь начинается в стене',
+  hq_blocked: 'Штаб перекрыт собственным строением',
+  no_path: 'Лабиринт не проходим: хотя бы с одних ворот до штаба нет маршрута',
+  path_too_short: 'Маршрут короче N клеток: атакующий дойдёт до штаба почти сразу',
+  orphan_cells: 'Есть проходимые клетки, отрезанные от ворот: башни там не стреляют ни по кому'
+};
+
+function issueText(issue) {
+  if (issue === 'path_too_short') return ISSUE_TEXT[issue].replace('N', String(geo().path.minTiles));
+  return ISSUE_TEXT[issue] || issue;
+}
+
+// ─── Отрисовка поля ──────────────────────────────────────────────────────────
+
+const VIEW = {
+  pad: 14, cell: 34, dpr: 1, ctx: null, size: 0,
+  style: 'art',   // 'art' — векторные модели, 'schema' — плоские кружки и квадраты (диагностика)
+  grid: true,     // сетка клеток поверх грунта
+  ranges: false,  // радиусы всех башен сразу, а не только под курсором
+  anim: true      // частицы, дым, покачивание стволов
+};
+
+const COLORS = {
+  field: '#0a0e13', fieldDeep: '#05080b', line: '#1c232c', lineSoft: '#141a21',
+  spawn: 'rgba(226,104,95,.18)', spawnEdge: '#e2685f',
+  pad: 'rgba(78,194,122,.10)', padEdge: 'rgba(78,194,122,.55)',
+  wall: '#39434f', wallEdge: '#5b6a7d',
+  hq: '#4ec27a', path: 'rgba(78,161,255,.30)', pathEdge: 'rgba(78,161,255,.75)',
+  hover: 'rgba(255,255,255,.10)', hoverBad: 'rgba(226,104,95,.25)', range: 'rgba(78,161,255,.12)',
+  drone: '#e6b24a', droneDead: 'rgba(230,178,74,.35)', boom: '#e2685f'
+};
+
+/** Тир — сквозной ранг техники: одним цветом помечены башни, дроны и их следы. */
+const TIER_COLOR = { 1: '#4ea1ff', 2: '#b487ff', 3: '#4ec2c2' };
+const TOWER_COLOR = TIER_COLOR;
+const DRONE_COLOR = { 1: '#e6b24a', 2: '#f08a5d', 3: '#e2685f' };
+// ─── Художественный слой ─────────────────────────────────────────────────────
+/*
+ * Башня = постамент (mount) + головная часть (head). Постамент отвечает за то, «как
+ * это стоит на земле», голова — за то, «чем это стреляет». Код чертежа приходит с
+ * сервера (economy.base.units[].code и inventory[].code), поэтому силуэт орудия —
+ * производная от каталога, а не вторая энумерация: новый чертёж попадёт в fallback
+ * по виду и тиру и будет нарисован, а не исчезнет с поля.
+ *
+ * Здесь нет ни одной боевой цифры: ни урона, ни радиуса, ни очерёдности выстрелов.
+ * Сервер их не отдаёт (см. комментарий к реплею), поэтому всё ниже — косметика,
+ * синхронизированная только с теми фактами, которые в ответе есть.
+ */
+
+const TURRET_ART = {
+  tower_laser_mk1:          { mount: 'ring',    head: 'laser',     hue: '#7fd0ff', recoil: 0.10 },
+  tower_rail_mk2:           { mount: 'ring',    head: 'rail',      hue: '#c9a6ff', recoil: 0.22 },
+  tower_plasma_mk3:         { mount: 'hex',     head: 'plasma',    hue: '#8ff0e6', recoil: 0.14 },
+  weapon_cannon_mk1:        { mount: 'sandbag', head: 'cannon',    hue: '#ffd27f', recoil: 0.18 },
+  weapon_railgun_mk3:       { mount: 'hex',     head: 'railgun',   hue: '#b8c6ff', recoil: 0.28 },
+  weapon_plasma_cannon_mk3: { mount: 'ring',    head: 'plasmagun', hue: '#ff9de2', recoil: 0.16 },
+  weapon_railgun_heavy_mk3: { mount: 'bunker',  head: 'heavyrail', hue: '#e8eef7', recoil: 0.34 }
+};
+
+/** Неизвестный код — силуэт по виду и тиру: техника на поле обязана быть видна. */
+function turretArtOf(code, kind, tier) {
+  const known = TURRET_ART[code];
+  if (known) return known;
+  if (kind === 'weapon') {
+    return {
+      mount: tier >= 3 ? 'bunker' : 'sandbag', head: tier >= 3 ? 'railgun' : 'cannon',
+      hue: TIER_COLOR[tier] || TIER_COLOR[1], recoil: 0.2
+    };
+  }
+  return {
+    mount: tier >= 3 ? 'hex' : 'ring', head: ['laser', 'rail', 'plasma'][clamp(tier, 1, 3) - 1],
+    hue: TIER_COLOR[tier] || TIER_COLOR[1], recoil: 0.14
+  };
+}
+
+const DRONE_ART = {
+  drone_cargo_mk1:    { shape: 'hauler',   hue: '#e6b24a', scale: 1.05 },
+  drone_strike_mk2:   { shape: 'dart',     hue: '#f08a5d', scale: 0.95 },
+  drone_cerberus_mk3: { shape: 'cerberus', hue: '#e2685f', scale: 1.10 }
+};
+
+function droneArtOf(code, tier) {
+  const known = DRONE_ART[code];
+  if (known) return known;
+  const shapes = ['dart', 'hauler', 'cerberus'];
+  return { shape: shapes[clamp(tier, 1, 3) - 1], hue: DRONE_COLOR[tier] || DRONE_COLOR[1], scale: 1 };
+}
+
+/** Статика поля (грунт, сетка, дорога, ворота, площадки, стены) — в offscreen-холст. */
+const TERRAIN = { canvas: null, ctx: null, key: '' };
+
+// ─── Частицы ─────────────────────────────────────────────────────────────────
+/*
+ * Координаты — в клетках (вещественные), скорости — в клетках в секунду: кадр не
+ * зависит ни от размера клетки, ни от DPR. Пул ограничен, потому что реплей приносит
+ * сотни событий сразу, а потолок кадров есть и на сервере (SIM_MAX_EVENTS).
+ */
+const FX = { parts: [], cap: 520 };
+
+function fxPush(part) {
+  if (FX.parts.length < FX.cap) FX.parts.push(part);
+}
+function clearFx() { FX.parts.length = 0; }
+
+function spawnSparks(x, y, count, color, power) {
+  for (let i = 0; i < count; i += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = (0.6 + Math.random() * 1.9) * (power || 1);
+    fxPush({
+      kind: 'spark', x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      age: 0, life: 0.22 + Math.random() * 0.34, size: 0.035 + Math.random() * 0.05, color
+    });
+  }
+}
+
+function spawnSmoke(x, y, count, color, drift) {
+  for (let i = 0; i < count; i += 1) {
+    fxPush({
+      kind: 'smoke', x: x + (Math.random() - 0.5) * 0.3, y: y + (Math.random() - 0.5) * 0.3,
+      vx: (Math.random() - 0.5) * 0.25 + (drift || 0), vy: -0.18 - Math.random() * 0.3,
+      age: 0, life: 0.9 + Math.random() * 1.1, size: 0.16 + Math.random() * 0.2,
+      grow: 0.5 + Math.random() * 0.5, color: color || '#3a4048'
+    });
+  }
+}
+
+function spawnEmbers(x, y, count, color) {
+  for (let i = 0; i < count; i += 1) {
+    fxPush({
+      kind: 'ember', x: x + (Math.random() - 0.5) * 0.4, y: y + (Math.random() - 0.5) * 0.4,
+      vx: (Math.random() - 0.5) * 0.3, vy: -0.5 - Math.random() * 0.7,
+      age: 0, life: 0.5 + Math.random() * 0.8, size: 0.03 + Math.random() * 0.04, color
+    });
+  }
+}
+
+function spawnRing(x, y, color, reach, life) {
+  fxPush({ kind: 'ring', x, y, age: 0, life: life || 0.42, size: reach || 0.9, color });
+}
+
+function spawnDebris(x, y, count, color) {
+  for (let i = 0; i < count; i += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 0.5 + Math.random() * 1.4;
+    fxPush({
+      kind: 'debris', x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      age: 0, life: 0.5 + Math.random() * 0.6, size: 0.05 + Math.random() * 0.08,
+      spin: (Math.random() - 0.5) * 14, rot: Math.random() * Math.PI, color
+    });
+  }
+}
+
+function spawnFlash(x, y, angle, color, length) {
+  fxPush({ kind: 'flash', x, y, angle, age: 0, life: 0.09, size: length || 0.5, color });
+}
+
+function spawnTrail(x, y, angle, color) {
+  fxPush({ kind: 'trail', x, y, angle, age: 0, life: 0.3, size: 0.16, color });
+}
+
+/**
+ * Часы анимации в секундах. Счётчик — монотонный (performance), а не игровое время:
+ * пауза реплея или перемотка не должны останавливать дыхание реактора и частицы.
+ * Когда анимация выключена, возвращаются вечные нули — кадр становится детерминированным.
+ */
+const animTime = () => (VIEW.anim ? (typeof performance === 'undefined' ? Date.now() : performance.now()) / 1000 : 0);
+const isFlat = () => VIEW.style === 'schema';
+
+function updateFx(dt) {
+  if (dt <= 0 || FX.parts.length === 0) return;
+  for (let i = FX.parts.length - 1; i >= 0; i -= 1) {
+    const part = FX.parts[i];
+    part.age += dt;
+    if (part.age >= part.life) { FX.parts.splice(i, 1); continue; }
+    if (part.vx !== undefined) {
+      part.x += part.vx * dt;
+      part.y += part.vy * dt;
+      const drag = part.kind === 'smoke' ? 0.6 : part.kind === 'debris' ? 1.6 : 3.2;
+      part.vx -= part.vx * drag * dt;
+      part.vy -= part.vy * drag * dt;
+      if (part.kind === 'debris') part.vy += 2.6 * dt;
+    }
+    if (part.kind === 'smoke') part.size += part.grow * dt;
+  }
+}
+
+function drawFx(ctx) {
+  if (FX.parts.length === 0) return;
+  const cell = VIEW.cell;
+  ctx.save();
+  for (const part of FX.parts) {
+    const t = part.age / part.life;
+    const cx = centerX(part.x);
+    const cy = centerY(part.y);
+    if (part.kind === 'smoke') {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = (1 - t) * 0.42;
+      const r = part.size * cell;
+      const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grd.addColorStop(0, alpha(part.color, 0.85));
+      grd.addColorStop(1, alpha(part.color, 0));
+      circlePath(ctx, cx, cy, r);
+      ctx.fillStyle = grd;
+      ctx.fill();
+      continue;
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    if (part.kind === 'spark' || part.kind === 'ember') {
+      ctx.globalAlpha = 1 - t * t;
+      circlePath(ctx, cx, cy, part.size * cell * (1 - t * 0.5));
+      fillPath(ctx, part.color);
+      ctx.fill();
+      ctx.globalAlpha = (1 - t) * 0.3;
+      circlePath(ctx, cx, cy, part.size * cell * 2.4);
+      ctx.fill();
+    } else if (part.kind === 'ring') {
+      ctx.globalAlpha = (1 - t) * 0.8;
+      circlePath(ctx, cx, cy, part.size * cell * (0.15 + t * 0.95));
+      strokePath(ctx, part.color, Math.max(1, 3.4 * (1 - t)));
+    } else if (part.kind === 'debris') {
+      ctx.globalAlpha = 1 - t;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(part.rot + part.spin * part.age);
+      fillPath(ctx, part.color);
+      const s = part.size * cell;
+      ctx.fillRect(-s / 2, -s / 2, s, s * 0.7);
+      ctx.restore();
+    } else if (part.kind === 'flash') {
+      ctx.globalAlpha = 1 - t;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(part.angle);
+      const len = part.size * cell;
+      const grd = ctx.createLinearGradient(0, 0, len, 0);
+      grd.addColorStop(0, alpha(part.color, 0.95));
+      grd.addColorStop(1, alpha(part.color, 0));
+      polyPath(ctx, [[0, -cell * 0.09], [len * 0.55, -cell * 0.03], [len, 0], [len * 0.55, cell * 0.03], [0, cell * 0.09]]);
+      ctx.fillStyle = grd;
+      ctx.fill();
+      circlePath(ctx, 0, 0, cell * 0.11 * (1 - t * 0.4));
+      fillPath(ctx, '#fff8e6');
+      ctx.fill();
+      ctx.restore();
+    } else if (part.kind === 'trail') {
+      ctx.globalAlpha = (1 - t) * 0.5;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(part.angle + Math.PI);
+      const len = part.size * cell * 3;
+      const grd = ctx.createLinearGradient(0, 0, len, 0);
+      grd.addColorStop(0, alpha(part.color, 0.7));
+      grd.addColorStop(1, alpha(part.color, 0));
+      polyPath(ctx, [[0, -cell * 0.05], [len, 0], [0, cell * 0.05]]);
+      ctx.fillStyle = grd;
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+}
+
+/** Материалы общих для всех силуэтов: металл, бетон, медь, оптика, сажа, брезент мешков. */
+const MAT = {
+  steel: '#7f8b9a', steelDark: '#39424e', steelLight: '#cbd5e1',
+  concrete: '#48515d', concreteDark: '#272d35', concreteLight: '#7b8794',
+  copper: '#c98a4b', glass: '#8fd6ff', soot: '#14181e', rubber: '#22262c',
+  hazard: '#e2b93b', sandbag: '#9a8a5f'
+};
+
+function setupCanvas() {
+  const cv = $('cv');
+  const size = Math.max(GW(), GH()) * VIEW.cell + VIEW.pad * 2;
+  VIEW.dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(size * VIEW.dpr);
+  cv.height = Math.round(size * VIEW.dpr);
+  cv.style.width = size + 'px';
+  cv.style.height = size + 'px';
+  VIEW.ctx = cv.getContext('2d');
+  VIEW.ctx.setTransform(VIEW.dpr, 0, 0, VIEW.dpr, 0, 0);
+  VIEW.size = size;
+  TERRAIN.key = '';            // статика перерисовывается под новый холст
+  TERRAIN.canvas = null;
+}
+
+const px = (value) => VIEW.pad + value * VIEW.cell;
+const centerX = (x) => px(x) + VIEW.cell / 2;
+const centerY = (y) => px(y) + VIEW.cell / 2;
+
+function rect(ctx, x, y, w, h, fill, stroke) {
+  ctx.fillStyle = fill;
+  ctx.fillRect(x, y, w, h);
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.strokeRect(x + .5, y + .5, w - 1, h - 1); }
+}
+
+// ─── Цвет и геометрия для векторных моделей ──────────────────────────────────
+
+const RGB_CACHE = new Map();
+
+function rgbOf(color) {
+  const key = String(color);
+  const hit = RGB_CACHE.get(key);
+  if (hit) return hit;
+  let hex = key.trim();
+  let value = [200, 200, 200];
+  if (hex[0] === '#') {
+    if (hex.length === 4) hex = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+    const num = parseInt(hex.slice(1, 7), 16);
+    if (!Number.isNaN(num)) value = [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+  } else {
+    const matched = /rgba?\(([^)]+)\)/.exec(hex);
+    if (matched) {
+      const parts = matched[1].split(',').map((part) => Math.round(Number(part)));
+      value = [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+    }
+  }
+  RGB_CACHE.set(key, value);
+  return value;
+}
+
+const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function mixColor(a, b, t) {
+  const x = rgbOf(a);
+  const y = rgbOf(b);
+  return 'rgb(' + Math.round(lerp(x[0], y[0], t)) + ',' + Math.round(lerp(x[1], y[1], t)) +
+    ',' + Math.round(lerp(x[2], y[2], t)) + ')';
+}
+
+/** k > 0 — осветление к белому, k < 0 — затемнение к чёрному. */
+function shade(color, k) {
+  return mixColor(color, k > 0 ? '#ffffff' : '#000000', clamp(Math.abs(k), 0, 1));
+}
+
+function alpha(color, a) {
+  const value = rgbOf(color);
+  return 'rgba(' + value[0] + ',' + value[1] + ',' + value[2] + ',' + a + ')';
+}
+
+function rrPath(ctx, x, y, w, h, r) {
+  const rad = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.lineTo(x + w - rad, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+  ctx.lineTo(x + w, y + h - rad);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+  ctx.lineTo(x + rad, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+  ctx.lineTo(x, y + rad);
+  ctx.quadraticCurveTo(x, y, x + rad, y);
+  ctx.closePath();
+}
+
+function polyPath(ctx, points) {
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point[0], point[1]); else ctx.lineTo(point[0], point[1]);
+  });
+  ctx.closePath();
+}
+
+function circlePath(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.closePath();
+}
+
+function fillPath(ctx, fill) { ctx.fillStyle = fill; ctx.fill(); }
+function strokePath(ctx, stroke, width) {
+  if (!stroke) return;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = width || 1;
+  ctx.stroke();
+}
+
+/** Детерминированный шум по клетке: текстура не «кипит» между кадрами. */
+function hashNoise(x, y, salt) {
+  const s = Math.sin(x * 127.1 + y * 311.7 + (salt || 0) * 74.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// ─── Статика поля: грунт, сетка, дорога, ворота, площадки, стены ─────────────
+
+function terrainSignature(draft, analysis) {
+  const walls = draft ? draft.walls.map((cell) => cell.x + ',' + cell.y).sort().join(' ') : '';
+  const path = analysis && analysis.path && analysis.path.length
+    ? analysis.path.length + ':' + analysis.path[0].x + ',' + analysis.path[0].y
+    : '-';
+  return [VIEW.size, VIEW.cell, VIEW.style, VIEW.grid ? 1 : 0, GW(), GH(), path, walls].join('|');
+}
+
+function paintTerrain(ctx, draft, analysis) {
+  drawGround(ctx);
+  if (VIEW.grid) drawGrid(ctx);
+  drawHqPads(ctx);
+  if (analysis && analysis.path && analysis.path.length) drawRoad(ctx, analysis.path);
+  drawGates(ctx);
+  if (draft) for (const wall of draft.walls) drawWallSlab(ctx, wall.x, wall.y);
+}
+
+function drawGround(ctx) {
+  const cell = VIEW.cell;
+  const w = GW() * cell;
+  const h = GH() * cell;
+  ctx.fillStyle = COLORS.field;
+  ctx.fillRect(VIEW.pad, VIEW.pad, w, h);
+  if (isFlat()) return;
+
+  // Пятна грунта и кратеры — по детерминированному шуму клетки: между кадрами не дрожат.
+  for (let y = 0; y < GH(); y += 1) {
+    for (let x = 0; x < GW(); x += 1) {
+      const n = hashNoise(x, y, 1);
+      const cx = centerX(x);
+      const cy = centerY(y);
+      if (n > 0.74) {
+        ctx.globalAlpha = 0.5;
+        fillPath(ctx, n > 0.9 ? '#111820' : '#0d131a');
+        circlePath(ctx, cx + (n - 0.5) * cell * 0.4, cy + (hashNoise(x, y, 2) - 0.5) * cell * 0.4,
+          cell * (0.22 + n * 0.3));
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      if (hashNoise(x, y, 3) > 0.9) {
+        const r = cell * 0.16;
+        strokePath(ctx, '#161d26', 1.5);
+        circlePath(ctx, cx, cy, r);
+        ctx.stroke();
+        strokePath(ctx, '#05070a', 1.5);
+        circlePath(ctx, cx, cy - 1, r * 0.7);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Виньетка: поле читается как участок под прожектором, а не как лист бумаги.
+  const grd = ctx.createRadialGradient(VIEW.size / 2, VIEW.size / 2, VIEW.size * 0.18,
+    VIEW.size / 2, VIEW.size / 2, VIEW.size * 0.72);
+  grd.addColorStop(0, 'rgba(255,255,255,.035)');
+  grd.addColorStop(1, 'rgba(0,0,0,.45)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(VIEW.pad, VIEW.pad, w, h);
+}
+
+function drawGrid(ctx) {
+  const w = GW();
+  const h = GH();
+  ctx.strokeStyle = COLORS.line;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x <= w; x += 1) { ctx.moveTo(px(x) + 0.5, VIEW.pad); ctx.lineTo(px(x) + 0.5, px(h)); }
+  for (let y = 0; y <= h; y += 1) { ctx.moveTo(VIEW.pad, px(y) + 0.5); ctx.lineTo(px(w), px(y) + 0.5); }
+  ctx.stroke();
+}
+
+function drawHqPads(ctx) {
+  const cell = VIEW.cell;
+  for (const pad of geo().hqPads) {
+    const x = px(pad.x);
+    const y = px(pad.y);
+    ctx.fillStyle = COLORS.pad;
+    ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    strokePath(ctx, COLORS.padEdge, 1);
+    ctx.strokeRect(x + 1.5, y + 1.5, cell - 3, cell - 3);
+    ctx.restore();
+    // Галочки углов: площадка — место под строительство, а не препятствие.
+    strokePath(ctx, 'rgba(78,194,122,.8)', 1.6);
+    const t = cell * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(x + 2, y + 2 + t); ctx.lineTo(x + 2, y + 2); ctx.lineTo(x + 2 + t, y + 2);
+    ctx.moveTo(x + cell - 2 - t, y + cell - 2); ctx.lineTo(x + cell - 2, y + cell - 2); ctx.lineTo(x + cell - 2, y + cell - 2 - t);
+    ctx.stroke();
+  }
+}
+
+/** Маршрут — не синяя линия, а дорога: покрытие, бордюр, разметка и шевроны направления. */
+function drawRoad(ctx, path) {
+  const cell = VIEW.cell;
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  path.forEach((cellRef, index) => {
+    const cx = centerX(cellRef.x);
+    const cy = centerY(cellRef.y);
+    if (index === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+  });
+  if (isFlat()) {
+    strokePath(ctx, COLORS.path, cell * 0.7);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  strokePath(ctx, '#141a22', cell * 0.92);
+  ctx.stroke();
+  strokePath(ctx, '#1d2531', cell * 0.74);
+  ctx.stroke();
+  strokePath(ctx, 'rgba(78,161,255,.16)', cell * 0.5);
+  ctx.stroke();
+
+  ctx.setLineDash([cell * 0.2, cell * 0.24]);
+  strokePath(ctx, 'rgba(150,190,240,.35)', 1.6);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Шевроны направления: каждые три клетки маршрута, куда пойдёт рой.
+  ctx.fillStyle = 'rgba(160,200,250,.30)';
+  for (let i = 2; i < path.length - 1; i += 3) {
+    const from = path[i];
+    const to = path[i + 1];
+    const dx = Math.sign(to.x - from.x);
+    const dy = Math.sign(to.y - from.y);
+    if (!dx && !dy) continue;
+    const cx = centerX(from.x);
+    const cy = centerY(from.y);
+    const a = Math.atan2(dy, dx);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(a);
+    const s = cell * 0.16;
+    polyPath(ctx, [[-s, -s], [s * 0.4, 0], [-s, s], [-s * 0.4, 0]]);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/**
+ * Главный кадр. Порядок слоёв фиксирован: статика поля (грунт → сетка → площадки →
+ * дорога → ворота → стены) кешится в отдельный холст и лепится одним drawImage;
+ * поверх — башни, штаб, частицы, дроны и курсор. Статика перерисовывается только
+ * когда изменилась планировка, стиль, сетка или размер холста.
+ */
+function draw() {
+  const ctx = VIEW.ctx;
+  if (!ctx || !S.cfg) return;
+  const replay = S.replay;
+  const draft = S.draft;
+  const analysis = draft && !replay ? analyzeLayout(draft) : null;
+  const occupied = draft ? occupancy(draft) : new Map();
+
+  ctx.clearRect(0, 0, VIEW.size, VIEW.size);
+  paintStatic(ctx, draft, analysis, replay);
+
+  if (replay) {
+    drawReplayField(ctx, replay);
+    drawFx(ctx);
+    return;
+  }
+
+  drawRanges(ctx, draft, occupied);
+  drawTowers(ctx, draft, occupied);
+  drawHq(ctx, draft ? draft.hq : geo().defaultHq, replay);
+  drawFx(ctx);
+  drawHover(ctx, analysis);
+  drawGhost(ctx);
+}
+
+function paintStatic(ctx, draft, analysis, replay) {
+  const walls = replay ? [] : draft ? draft.walls : [];
+  const path = replay ? replay.route : analysis && analysis.path ? analysis.path : null;
+  const key = terrainSignature({ walls }, path ? { path } : null);
+  if (key !== TERRAIN.key) rebuildTerrain(key, walls, path);
+  if (TERRAIN.canvas) ctx.drawImage(TERRAIN.canvas, 0, 0, VIEW.size, VIEW.size);
+  else rect(ctx, VIEW.pad, VIEW.pad, GW() * VIEW.cell, GH() * VIEW.cell, COLORS.field);
+}
+
+function rebuildTerrain(key, walls, path) {
+  const size = VIEW.size;
+  if (!TERRAIN.canvas) {
+    TERRAIN.canvas = document.createElement('canvas');
+    TERRAIN.ctx = TERRAIN.canvas.getContext('2d');
+  }
+  TERRAIN.canvas.width = Math.round(size * VIEW.dpr);
+  TERRAIN.canvas.height = Math.round(size * VIEW.dpr);
+  const inner = TERRAIN.ctx;
+  inner.setTransform(VIEW.dpr, 0, 0, VIEW.dpr, 0, 0);
+  inner.clearRect(0, 0, size, size);
+  paintTerrain(inner, { walls }, path ? { path } : null);
+  TERRAIN.key = key;
+}
+
+/** Ворота роботов: ангар в стене периметра с направляющими, предостерегающей разметкой. */
+function drawGates(ctx) {
+  const cell = VIEW.cell;
+  for (const spawn of geo().spawns) {
+    const dx = spawn.x === 0 ? 1 : spawn.x === GW() - 1 ? -1 : 0;
+    const dy = spawn.y === 0 ? 1 : spawn.y === GH() - 1 ? -1 : 0;
+    if (!dx && !dy) continue;
+    if (isFlat()) {
+      rect(ctx, px(spawn.x) + 1, px(spawn.y) + 1, cell - 2, cell - 2, COLORS.spawn, COLORS.spawnEdge);
+      drawGateArrow(ctx, spawn, dx, dy);
+      continue;
+    }
+    ctx.save();
+    ctx.translate(centerX(spawn.x), centerY(spawn.y));
+    ctx.rotate(Math.atan2(dy, dx));   // +x локальной системы — внутрь поля
+    const half = cell / 2;
+
+    // Прорез ангара: наружу — темнота, внутрь — подсвеченный портал.
+    const grd = ctx.createLinearGradient(-half, 0, half * 0.9, 0);
+    grd.addColorStop(0, '#04060a');
+    grd.addColorStop(0.55, '#1a1013');
+    grd.addColorStop(1, alpha(COLORS.spawnEdge, 0.30));
+    rrPath(ctx, -half, -half * 0.86, cell, cell * 0.86, 4);
+    ctx.fillStyle = grd;
+    ctx.fill();
+
+    // Направляющие по бокам проёма.
+    fillPath(ctx, MAT.steelDark);
+    ctx.fillRect(-half, -half * 0.9, cell, cell * 0.1);
+    ctx.fillRect(-half, half * 0.8, cell, cell * 0.1);
+    strokePath(ctx, alpha(MAT.steelLight, 0.25), 1);
+    ctx.strokeRect(-half + 0.5, -half * 0.9 + 0.5, cell - 1, cell * 0.1 - 1);
+    ctx.strokeRect(-half + 0.5, half * 0.8 + 0.5, cell - 1, cell * 0.1 - 1);
+
+    // Полосатый порог на внешнем срезе.
+    ctx.save();
+    rrPath(ctx, -half, -half * 0.86, cell * 0.22, cell * 0.86, 3);
+    ctx.clip();
+    for (let i = -6; i < 6; i += 1) {
+      ctx.fillStyle = i % 2 === 0 ? MAT.hazard : '#20160a';
+      ctx.save();
+      ctx.translate(-half + cell * 0.11, 0);
+      ctx.rotate(-0.5);
+      ctx.fillRect(-cell * 0.2, i * cell * 0.11, cell * 0.4, cell * 0.055);
+      ctx.restore();
+    }
+    ctx.restore();
+
+    //два шеврона внутрь: откуда придут дроны.
+    ctx.globalAlpha = 0.85;
+    for (let i = 0; i < 2; i += 1) {
+      const ox = -cell * 0.06 + i * cell * 0.2;
+      polyPath(ctx, [[ox - cell * 0.1, -cell * 0.16], [ox + cell * 0.04, 0], [ox - cell * 0.1, cell * 0.16]]);
+      strokePath(ctx, alpha(COLORS.spawnEdge, 0.9 - i * 0.35), 2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+function drawGateArrow(ctx, spawn, dx, dy) {
+  const cx = centerX(spawn.x);
+  const cy = centerY(spawn.y);
+  ctx.strokeStyle = COLORS.spawnEdge;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx - dx * 8, cy - dy * 8);
+  ctx.lineTo(cx + dx * 7, cy + dy * 7);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx + dx * 7, cy + dy * 7);
+  ctx.lineTo(cx + dx * 2 - dy * 4, cy + dy * 2 - dx * 4);
+  ctx.moveTo(cx + dx * 7, cy + dy * 7);
+  ctx.lineTo(cx + dx * 2 + dy * 4, cy + dy * 2 + dx * 4);
+  ctx.stroke();
+}
+
+/** Стена: бетонная плита с фаской, сколами и тенями — а не серый квадрат. */
+function drawWallSlab(ctx, x, y) {
+  const cell = VIEW.cell;
+  const left = px(x);
+  const top = px(y);
+  if (isFlat()) {
+    rect(ctx, left + 2, top + 2, cell - 4, cell - 4, COLORS.wall, COLORS.wallEdge);
+    return;
+  }
+  const inset = cell * 0.08;
+  const size = cell - inset * 2;
+
+  ctx.fillStyle = 'rgba(0,0,0,.5)';
+  rrPath(ctx, left + inset + 1.5, top + inset + 2.5, size, size, 4);
+  ctx.fill();
+
+  const grd = ctx.createLinearGradient(left, top, left + cell, top + cell);
+  grd.addColorStop(0, MAT.concreteLight);
+  grd.addColorStop(0.45, MAT.concrete);
+  grd.addColorStop(1, MAT.concreteDark);
+  rrPath(ctx, left + inset, top + inset, size, size, 4);
+  ctx.fillStyle = grd;
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.concreteDark, 0.9), 1);
+  ctx.stroke();
+
+  // Верхняя грань и фаска: плита освещена сверху-слева.
+  ctx.save();
+  rrPath(ctx, left + inset, top + inset, size, size, 4);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.10)';
+  ctx.fillRect(left + inset, top + inset, size, size * 0.16);
+  ctx.fillStyle = 'rgba(0,0,0,.28)';
+  ctx.fillRect(left + inset, top + cell - inset - size * 0.14, size, size * 0.14);
+  // Крап и скол — по детерминированному шуму клетки.
+  for (let i = 0; i < 5; i += 1) {
+    const nx = hashNoise(x, y, 10 + i);
+    const ny = hashNoise(x, y, 20 + i);
+    ctx.fillStyle = nx > 0.5 ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.22)';
+    ctx.fillRect(left + inset + nx * size, top + inset + ny * size, 1.6, 1.6);
+  }
+  if (hashNoise(x, y, 33) > 0.72) {
+    ctx.strokeStyle = 'rgba(0,0,0,.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const sx = left + inset + size * hashNoise(x, y, 41);
+    ctx.moveTo(sx, top + inset);
+    ctx.lineTo(sx + size * 0.18, top + inset + size * 0.42);
+    ctx.lineTo(sx - size * 0.1, top + inset + size);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Армирование по углам.
+  for (const [bx, by] of [[0.22, 0.22], [0.78, 0.22], [0.22, 0.78], [0.78, 0.78]]) {
+    circlePath(ctx, left + cell * bx, top + cell * by, cell * 0.035);
+    fillPath(ctx, alpha(MAT.steelDark, 0.9));
+    ctx.fill();
+    circlePath(ctx, left + cell * bx - 0.4, top + cell * by - 0.4, cell * 0.018);
+    fillPath(ctx, alpha(MAT.steelLight, 0.5));
+    ctx.fill();
+  }
+}
+function drawTowers(ctx, draft, occupied) {
+  if (!draft) return;
+  for (const unit of draft.units) {
+    const occupant = occupied.get(cellKey(unit.x, unit.y));
+    if (!occupant || occupant.kind !== 'unit') continue;
+    drawTurret(ctx, occupant, unit.x, unit.y);
+  }
+}
+
+/**
+ * Внешний вид по коду чертежа из каталога сервера. Неизвестный код ловит `turretArtOf`
+ * (префиксы + откат по kind/tier), поэтому невидимых башен не бывает априори — держать
+ * здесь зеркальный список кодов не нужно.
+ */
+function turretSpec(occupant) {
+  const item = occupant.itemId ? itemOf(occupant.itemId) : null;
+  const kind = item ? item.kind : 'tower';
+  const tier = item ? item.tier : (occupant.tier || 1);
+  return turretArtOf(item ? item.code : '', kind, tier);
+}
+
+/** Ствол смотрит на ближайшие ворота — так видно сектор обстрела ещё до боя. */
+function aimAngle(x, y) {
+  let best = null;
+  let bestD = Infinity;
+  for (const spawn of geo().spawns) {
+    const dx = spawn.x - x;
+    const dy = spawn.y - y;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = spawn; }
+  }
+  if (!best) return -Math.PI / 2;
+  return Math.atan2(centerY(best.y) - centerY(y), centerX(best.x) - centerX(x));
+}
+
+/** Вид предмета из каталога: у башни и оружия разные силуэты даже на одной клетке. */
+function unitKindOf(occupant) {
+  const item = occupant.itemId ? itemOf(occupant.itemId) : null;
+  if (item) return item.kind;
+  return occupant.kind === 'weapon' ? 'weapon' : 'tower';
+}
+
+function drawTurret(ctx, occupant, x, y) {
+  const spec = turretSpec(occupant);
+  const cell = VIEW.cell;
+  const cx = centerX(x);
+  const cy = centerY(y);
+  const accent = spec.hue;
+
+  rrPath(ctx, px(x) + 1, px(y) + 1, cell - 2, cell - 2, 5);
+  fillPath(ctx, alpha(accent, 0.09));
+  ctx.fill();
+  strokePath(ctx, alpha(accent, 0.22), 1);
+  ctx.stroke();
+
+  if (isFlat()) {
+    drawTowerFlat(ctx, occupant, x, y, accent);
+    return;
+  }
+  drawMount(ctx, spec, cx, cy, cell);
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(aimAngle(x, y));
+  drawHead(ctx, spec, cell, occupant.tier || 1);
+  ctx.restore();
+  drawTurretBadge(ctx, spec, occupant, cx, cy, cell, accent);
+}
+
+/**
+ * Схема (style='schema'): плоские фигуры без градиентов и деталей. Нужны ровно для
+ * одного — сравнивать слой графики с планировкой: квадрат клетки, ромб оружия,
+ * кружок башни и цифра тира. Координаты — клеточные, перевод в пиксели делает px().
+ */
+function drawTowerFlat(ctx, occupant, gx, gy, color) {
+  const cell = VIEW.cell;
+  const cx = centerX(gx);
+  const cy = centerY(gy);
+  const r = cell * 0.34;
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  fillPath(ctx, color);
+  ctx.fillRect(px(gx) + 2, px(gy) + 2, cell - 4, cell - 4);
+  ctx.globalAlpha = 1;
+  if (unitKindOf(occupant) === 'weapon') {
+    polyPath(ctx, [[cx, cy - r], [cx + r, cy], [cx, cy + r], [cx - r, cy]]);
+  } else {
+    circlePath(ctx, cx, cy, r);
+  }
+  fillPath(ctx, alpha(color, 0.5));
+  ctx.fill();
+  strokePath(ctx, color, 1.5);
+  ctx.stroke();
+  fillPath(ctx, '#0d1015');
+  ctx.font = 'bold ' + Math.max(9, Math.round(cell * 0.32)) + 'px ui-monospace, Consolas, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(occupant.tier || 1), cx, cy);
+  ctx.restore();
+}
+
+function drawTurretBadge(ctx, spec, occupant, cx, cy, cell, accent) {
+  const r = cell * 0.44;
+  const n = Math.max(0, Math.min(5, (occupant.level || 1) - 1));
+  for (let i = 0; i < n; i += 1) {
+    const a = Math.PI * 0.5 + (i - (n - 1) / 2) * 0.3;
+    circlePath(ctx, cx + Math.cos(a) * r, cy + Math.sin(a) * r, Math.max(1.3, cell * 0.045));
+    fillPath(ctx, accent);
+    ctx.fill();
+  }
+  if (cell < 26) return;
+  const bx = cx - cell * 0.46;
+  const by = cy - cell * 0.46;
+  rrPath(ctx, bx, by, cell * 0.32, cell * 0.24, 3);
+  ctx.fillStyle = 'rgba(4,7,11,.78)';
+  ctx.fill();
+  strokePath(ctx, alpha(accent, 0.55), 1);
+  ctx.stroke();
+  ctx.fillStyle = accent;
+  ctx.font = 'bold ' + Math.round(cell * 0.17) + 'px ui-monospace, Consolas, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(occupant.tier), bx + cell * 0.16, by + cell * 0.13);
+}
+
+/** Платформа: кольцо генератора, шестиугольник, мешки с песком, ДОТ или стартовый стол. */
+function drawMount(ctx, spec, cx, cy, cell) {
+  const r = cell * 0.42;
+  ctx.save();
+  ctx.translate(cx, cy);
+  fillPath(ctx, 'rgba(0,0,0,.45)');
+  ctx.beginPath();
+  ctx.ellipse(1.5, 2.5, r * 0.98, r * 0.9, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (spec.mount === 'hex') {
+    polyPath(ctx, hexPoints(r));
+    const grd = ctx.createLinearGradient(-r, -r, r, r);
+    grd.addColorStop(0, MAT.steelLight);
+    grd.addColorStop(0.5, MAT.steel);
+    grd.addColorStop(1, MAT.steelDark);
+    ctx.fillStyle = grd;
+    ctx.fill();
+    strokePath(ctx, alpha(MAT.steelDark, 0.9), 1.2);
+    ctx.stroke();
+    polyPath(ctx, hexPoints(r * 0.66));
+    fillPath(ctx, '#131a22');
+    ctx.fill();
+    bolts(ctx, r * 0.84, 6, cell * 0.035, Math.PI / 6);
+  } else if (spec.mount === 'sandbag') {
+    fillPath(ctx, '#3a3325');
+    circlePath(ctx, 0, 0, r * 0.92);
+    ctx.fill();
+    for (let i = 0; i < 8; i += 1) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.save();
+      ctx.translate(Math.cos(a) * r * 0.78, Math.sin(a) * r * 0.78);
+      ctx.rotate(a + Math.PI / 2);
+      fillPath(ctx, i % 2 ? MAT.sandbag : shade(MAT.sandbag, -0.14));
+      rrPath(ctx, -r * 0.34, -r * 0.16, r * 0.68, r * 0.32, r * 0.15);
+      ctx.fill();
+      strokePath(ctx, 'rgba(0,0,0,.35)', 0.8);
+      ctx.stroke();
+      ctx.restore();
+    }
+    fillPath(ctx, '#2c2a22');
+    circlePath(ctx, 0, 0, r * 0.5);
+    ctx.fill();
+  } else if (spec.mount === 'bunker') {
+    rrPath(ctx, -r * 0.94, -r * 0.86, r * 1.88, r * 1.72, r * 0.3);
+    const grd = ctx.createLinearGradient(0, -r, 0, r);
+    grd.addColorStop(0, MAT.concreteLight);
+    grd.addColorStop(0.5, MAT.concrete);
+    grd.addColorStop(1, MAT.concreteDark);
+    ctx.fillStyle = grd;
+    ctx.fill();
+    strokePath(ctx, alpha(MAT.concreteDark, 0.95), 1.2);
+    ctx.stroke();
+    rrPath(ctx, -r * 0.6, -r * 0.52, r * 1.2, r * 1.04, r * 0.22);
+    fillPath(ctx, 'rgba(0,0,0,.28)');
+    ctx.fill();
+    fillPath(ctx, 'rgba(195,206,216,.45)');
+    rrPath(ctx, -r * 0.5, -r * 0.1, r, r * 0.16, r * 0.08);
+    ctx.fill();
+  } else if (spec.mount === 'pad') {
+    polyPath(ctx, hexPoints(r, Math.PI / 8));
+    fillPath(ctx, MAT.concreteDark);
+    ctx.fill();
+    strokePath(ctx, alpha(MAT.hazard, 0.5), 1.4);
+    ctx.stroke();
+    polyPath(ctx, hexPoints(r * 0.72, Math.PI / 8));
+    fillPath(ctx, '#232c36');
+    ctx.fill();
+    for (let i = 0; i < 4; i += 1) {
+      const a = Math.PI / 4 + (i / 4) * Math.PI * 2;
+      fillPath(ctx, MAT.steelDark);
+      rrPath(ctx, Math.cos(a) * r * 0.62 - r * 0.12, Math.sin(a) * r * 0.62 - r * 0.12, r * 0.24, r * 0.24, 2);
+      ctx.fill();
+    }
+    strokePath(ctx, alpha(MAT.hazard, 0.7), 2);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.34, -0.5, 1.1);
+    ctx.stroke();
+  } else {
+    // 'ring' — оплётка генератора под лазером
+    strokePath(ctx, MAT.steelDark, cell * 0.14);
+    circlePath(ctx, 0, 0, r * 0.86);
+    ctx.stroke();
+    strokePath(ctx, alpha(MAT.steelLight, 0.35), 1);
+    circlePath(ctx, 0, 0, r * 0.94);
+    ctx.stroke();
+    const grd = ctx.createRadialGradient(-r * 0.25, -r * 0.3, r * 0.1, 0, 0, r * 0.72);
+    grd.addColorStop(0, '#2c3742');
+    grd.addColorStop(1, '#161d25');
+    fillPath(ctx, grd);
+    circlePath(ctx, 0, 0, r * 0.72);
+    ctx.fill();
+    bolts(ctx, r * 0.86, 6, cell * 0.032, 0);
+  }
+  ctx.restore();
+}
+
+function hexPoints(r, offset) {
+  const pts = [];
+  for (let i = 0; i < 6; i += 1) {
+    const a = (offset || 0) + (i / 6) * Math.PI * 2;
+    pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+  }
+  return pts;
+}
+
+function bolts(ctx, r, count, size, offset) {
+  for (let i = 0; i < count; i += 1) {
+    const a = (offset || 0) + (i / count) * Math.PI * 2;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r;
+    circlePath(ctx, x, y, size);
+    fillPath(ctx, MAT.steelDark);
+    ctx.fill();
+    circlePath(ctx, x - size * 0.3, y - size * 0.3, size * 0.5);
+    fillPath(ctx, alpha(MAT.steelLight, 0.6));
+    ctx.fill();
+  }
+}
+
+/**
+ * Огневая головка в локальных координатах: +x — направление обстрела.
+ *
+ * Длина и толщина ствола — функция тира и отката (`recoil` из TURRET_ART: сколько
+ * энергии уходит в выстрел, столько и металла на люльку). Головок ровно пять
+ * рисунков, а кодов в TURRET_ART семь: оружие 2–3 тира отличается от башни тем же
+ * рисунком масштабом и массой, а не вторым набором геометрии — иначе каталог
+ * пришлось бы дублировать каждый раз, когда баланс добавляет чертёж.
+ */
+function drawHead(ctx, spec, cell, tier) {
+  const accent = spec.hue;
+  const t = Math.max(1, Math.min(4, tier || 1));
+  const recoil = spec.recoil || 0.15;
+  const len = cell * (0.28 + 0.04 * t + recoil * 0.7);
+  const w = cell * (0.14 + 0.012 * t + recoil * 0.1);
+  ctx.save();
+  ctx.lineJoin = 'round';
+  switch (spec.head) {
+    case 'rail': drawRailHead(ctx, cell, len, w, accent); break;
+    case 'plasma': drawPlasmaHead(ctx, cell, len, w, accent); break;
+    case 'cannon': drawCannonHead(ctx, cell, len, w, accent); break;
+    case 'missile': drawMissileHead(ctx, cell, len, w, accent); break;
+    // Оружие: та же геометрия, но длиннее и тяжелее — разницу видно без подписей.
+    case 'railgun': drawRailHead(ctx, cell, len * 1.25, w * 1.15, accent); break;
+    case 'plasmagun': drawPlasmaHead(ctx, cell, len * 1.1, w * 1.2, accent); break;
+    case 'heavyrail': drawRailHead(ctx, cell, len * 1.45, w * 1.4, accent); break;
+    default: drawLaserHead(ctx, cell, len, w, accent);
+  }
+  ctx.restore();
+}
+
+function muzzleGlow(ctx, x, y, r, color, strength) {
+  const grd = ctx.createRadialGradient(x, y, 0, x, y, r);
+  grd.addColorStop(0, alpha('#ffffff', 0.85 * strength));
+  grd.addColorStop(0.35, alpha(color, 0.6 * strength));
+  grd.addColorStop(1, alpha(color, 0));
+  fillPath(ctx, grd);
+  circlePath(ctx, x, y, r);
+  ctx.fill();
+}
+
+/** Металл ствола: светлая верхняя грань, тёмная нижняя — цилиндр читается сразу. */
+function barrelGradient(ctx, w) {
+  const grd = ctx.createLinearGradient(0, -w / 2, 0, w / 2);
+  grd.addColorStop(0, MAT.steelLight);
+  grd.addColorStop(0.4, MAT.steel);
+  grd.addColorStop(1, MAT.steelDark);
+  return grd;
+}
+
+function drawLaserHead(ctx, cell, len, w, accent) {
+  // Генератор за стволом и ребра охлаждения.
+  fillPath(ctx, MAT.steelDark);
+  rrPath(ctx, -cell * 0.28, -w * 0.75, cell * 0.26, w * 1.5, 3);
+  ctx.fill();
+  for (let i = 0; i < 3; i += 1) {
+    fillPath(ctx, alpha(MAT.steelLight, 0.35));
+    ctx.fillRect(-cell * 0.26 + i * cell * 0.07, -w * 0.95, cell * 0.02, w * 1.9);
+  }
+  // Сам лучевой ствол.
+  ctx.fillStyle = barrelGradient(ctx, w);
+  rrPath(ctx, -cell * 0.06, -w * 0.5, len + cell * 0.06, w, w * 0.4);
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.steelDark, 0.9), 1);
+  ctx.stroke();
+  // Фокусирующие кольца в цвет энергии.
+  for (let i = 0; i < 3; i += 1) {
+    const fx = len * (0.34 + i * 0.24);
+    fillPath(ctx, alpha(accent, 0.55 + i * 0.15));
+    rrPath(ctx, fx - cell * 0.02, -w * 0.62, cell * 0.05, w * 1.24, 1.5);
+    ctx.fill();
+  }
+  // Линза на срезе.
+  fillPath(ctx, '#0b0f14');
+  circlePath(ctx, len, 0, w * 0.34);
+  ctx.fill();
+  muzzleGlow(ctx, len, 0, w * (0.7 + 0.1 * Math.min(4, len / cell)), accent, 0.9);
+}
+
+function drawRailHead(ctx, cell, len, w, accent) {
+  // Силовой конденсаторный блок.
+  fillPath(ctx, MAT.steelDark);
+  rrPath(ctx, -cell * 0.3, -w * 0.9, cell * 0.26, w * 1.8, 3);
+  ctx.fill();
+  strokePath(ctx, alpha(accent, 0.5), 1);
+  ctx.stroke();
+  fillPath(ctx, alpha(accent, 0.7));
+  ctx.fillRect(-cell * 0.26, -w * 0.4, cell * 0.18, w * 0.16);
+  ctx.fillRect(-cell * 0.26, w * 0.16, cell * 0.18, w * 0.16);
+  // Две направляющие шины.
+  for (const side of [-1, 1]) {
+    const y = side * w * 0.56;
+    ctx.fillStyle = barrelGradient(ctx, w * 0.6);
+    rrPath(ctx, -cell * 0.06, y - w * 0.26, len + cell * 0.06, w * 0.52, 2);
+    ctx.fill();
+    strokePath(ctx, alpha(MAT.steelDark, 0.9), 0.8);
+    ctx.stroke();
+  }
+  // Поперечные катушки и дуга между шинами.
+  for (let i = 0; i < 4; i += 1) {
+    const cx = len * (0.12 + i * 0.26);
+    fillPath(ctx, alpha(MAT.steelLight, 0.28));
+    ctx.fillRect(cx, -w * 0.62, cell * 0.035, w * 1.24);
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  strokePath(ctx, alpha(accent, 0.5), 1.2);
+  ctx.beginPath();
+  ctx.moveTo(len * 0.1, -w * 0.5);
+  for (let i = 1; i <= 4; i += 1) ctx.lineTo(len * 0.1 + i * len * 0.2, (i % 2 ? 1 : -1) * w * 0.28);
+  ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over';
+  muzzleGlow(ctx, len, 0, w * 0.7, accent, 0.85);
+}
+
+function drawPlasmaHead(ctx, cell, len, w, accent) {
+  // Камера нагнетания сзади.
+  fillPath(ctx, MAT.steelDark);
+  rrPath(ctx, -cell * 0.3, -w * 1.05, cell * 0.28, w * 2.1, 4);
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.steelLight, 0.3), 1);
+  ctx.stroke();
+  for (let i = 0; i < 3; i += 1) {
+    fillPath(ctx, 'rgba(0,0,0,.45)');
+    ctx.fillRect(-cell * 0.27, -w * 0.75 + i * w * 0.6, cell * 0.2, w * 0.2);
+  }
+  // Укороченный широкий ствол.
+  ctx.fillStyle = barrelGradient(ctx, w * 1.2);
+  rrPath(ctx, -cell * 0.06, -w * 0.62, len * 0.86, w * 1.24, w * 0.4);
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.steelDark, 0.9), 1);
+  ctx.stroke();
+  // Два тора удержания.
+  for (let i = 0; i < 2; i += 1) {
+    const tx = len * (0.42 + i * 0.34);
+    strokePath(ctx, alpha(accent, 0.55 + i * 0.2), Math.max(1.2, cell * 0.05));
+    ctx.beginPath();
+    ctx.ellipse(tx, 0, w * 0.28, w * 0.86, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Сгусток плазмы в дульном срезе.
+  fillPath(ctx, '#0a0d12');
+  circlePath(ctx, len * 0.86, 0, w * 0.5);
+  ctx.fill();
+  muzzleGlow(ctx, len * 0.86, 0, w * 0.95, accent, 1);
+}
+
+function drawCannonHead(ctx, cell, len, w, accent) {
+  // Маска орудия.
+  const grd = ctx.createRadialGradient(-cell * 0.1, -cell * 0.08, cell * 0.04, 0, 0, w * 1.3);
+  grd.addColorStop(0, MAT.steelLight);
+  grd.addColorStop(1, MAT.steelDark);
+  fillPath(ctx, grd);
+  circlePath(ctx, -cell * 0.04, 0, w * 1.15);
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.steelDark, 0.9), 1);
+  ctx.stroke();
+  // Толстый ствол с эжектором посередине.
+  ctx.fillStyle = barrelGradient(ctx, w * 1.25);
+  rrPath(ctx, -cell * 0.02, -w * 0.55, len * 0.9, w * 1.1, w * 0.3);
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.steelDark, 0.9), 1);
+  ctx.stroke();
+  fillPath(ctx, alpha(MAT.steelDark, 0.9));
+  rrPath(ctx, len * 0.34, -w * 0.72, len * 0.2, w * 1.44, w * 0.3);
+  ctx.fill();
+  // Дульный тормоз с пазами.
+  fillPath(ctx, MAT.steel);
+  rrPath(ctx, len * 0.84, -w * 0.68, cell * 0.14, w * 1.36, 2);
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.steelDark, 0.95), 1);
+  ctx.stroke();
+  for (let i = 0; i < 2; i += 1) {
+    fillPath(ctx, 'rgba(0,0,0,.6)');
+    ctx.fillRect(len * 0.87 + i * cell * 0.05, -w * 0.5, cell * 0.022, w);
+  }
+  // Боеукладчик сбоку.
+  fillPath(ctx, MAT.steelDark);
+  rrPath(ctx, -cell * 0.3, w * 0.5, cell * 0.22, w * 0.9, 2);
+  ctx.fill();
+  strokePath(ctx, alpha(accent, 0.45), 1);
+  ctx.stroke();
+  muzzleGlow(ctx, len, 0, w * 0.6, accent, 0.7);
+}
+
+function drawMissileHead(ctx, cell, len, w, accent) {
+  // Пусковой пакет: корпус с наклоном, чтобы читались срезы труб.
+  ctx.save();
+  ctx.rotate(-0.14);
+  fillPath(ctx, 'rgba(0,0,0,.4)');
+  rrPath(ctx, -cell * 0.26, -w * 1.02, len * 0.98, w * 2.1, 3);
+  ctx.fill();
+  const grd = ctx.createLinearGradient(0, -w, 0, w);
+  grd.addColorStop(0, MAT.steelLight);
+  grd.addColorStop(0.5, MAT.steel);
+  grd.addColorStop(1, MAT.steelDark);
+  fillPath(ctx, grd);
+  rrPath(ctx, -cell * 0.28, -w * 1.08, len, w * 2.16, 3);
+  ctx.fill();
+  strokePath(ctx, alpha(MAT.steelDark, 0.95), 1);
+  ctx.stroke();
+  // Предупреждающая полоса на борту.
+  ctx.save();
+  rrPath(ctx, -cell * 0.28, -w * 1.08, len, w * 2.16, 3);
+  ctx.clip();
+  for (let i = -4; i < 8; i += 1) {
+    fillPath(ctx, i % 2 ? alpha(MAT.hazard, 0.85) : 'rgba(0,0,0,.35)');
+    ctx.save();
+    ctx.rotate(0.5);
+    ctx.fillRect(i * cell * 0.12, -cell * 0.5, cell * 0.06, cell);
+    ctx.restore();
+  }
+  ctx.restore();
+  // Срезы четырёх труб.
+  for (const [ty, tx] of [[-w * 0.5, len * 0.62], [w * 0.5, len * 0.62], [-w * 0.5, len * 0.98], [w * 0.5, len * 0.98]]) {
+    fillPath(ctx, '#0a0d12');
+    circlePath(ctx, tx, ty, w * 0.42);
+    ctx.fill();
+    strokePath(ctx, alpha(MAT.steelLight, 0.4), 1);
+    ctx.stroke();
+    fillPath(ctx, alpha(accent, 0.55));
+    circlePath(ctx, tx, ty, w * 0.2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** Штаб: купол реактора на бетонном основании, мачта с маячком и полоса целости. */
+function drawHq(ctx, hq, replay) {
+  const cell = VIEW.cell;
+  const cx = centerX(hq.x);
+  const cy = centerY(hq.y);
+  const dead = Boolean(replay && replay.hqDown);
+  const color = dead ? COLORS.boom : COLORS.hq;
+
+  if (isFlat()) {
+    ctx.fillStyle = dead ? 'rgba(226,104,95,.35)' : 'rgba(78,194,122,.25)';
+    ctx.fillRect(px(hq.x) + 1, px(hq.y) + 1, cell - 2, cell - 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, cell * 0.42, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = 'bold 11px ui-monospace, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Ш', cx, cy);
+  } else {
+    const r = cell * 0.46;
+    ctx.save();
+    ctx.translate(cx, cy);
+    fillPath(ctx, 'rgba(0,0,0,.5)');
+    rrPath(ctx, -r + 1.5, -r + 3, r * 2, r * 2, r * 0.28);
+    ctx.fill();
+
+    const plate = ctx.createLinearGradient(0, -r, 0, r);
+    plate.addColorStop(0, MAT.concreteLight);
+    plate.addColorStop(0.55, MAT.concrete);
+    plate.addColorStop(1, MAT.concreteDark);
+    fillPath(ctx, plate);
+    rrPath(ctx, -r, -r, r * 2, r * 2, r * 0.26);
+    ctx.fill();
+    strokePath(ctx, alpha(MAT.concreteDark, 0.95), 1.2);
+    ctx.stroke();
+
+    // Купол реактора.
+    const dome = ctx.createRadialGradient(-r * 0.22, -r * 0.26, r * 0.05, 0, 0, r * 0.8);
+    dome.addColorStop(0, dead ? '#5e2b28' : '#337a55');
+    dome.addColorStop(0.6, dead ? '#33191a' : '#17402d');
+    dome.addColorStop(1, '#0b1310');
+    fillPath(ctx, dome);
+    circlePath(ctx, 0, 0, r * 0.74);
+    ctx.fill();
+    strokePath(ctx, alpha(color, 0.8), 1.4);
+    ctx.stroke();
+    for (const k of [0.34, 0.55]) {
+      strokePath(ctx, alpha(color, 0.22), 1);
+      circlePath(ctx, 0, 0, r * k);
+      ctx.stroke();
+    }
+    strokePath(ctx, alpha(color, 0.18), 1);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.74, 0); ctx.lineTo(r * 0.74, 0);
+    ctx.moveTo(0, -r * 0.74); ctx.lineTo(0, r * 0.74);
+    ctx.stroke();
+
+    // Ядро: дышит, если включена анимация.
+    const pulse = VIEW.anim ? 0.7 + 0.3 * Math.sin(animTime() * 2.2) : 0.85;
+    muzzleGlow(ctx, 0, 0, r * 0.5, color, dead ? 0.3 : pulse);
+
+    // Мачта с маячком.
+    strokePath(ctx, MAT.steelDark, Math.max(1.4, cell * 0.05));
+    ctx.beginPath();
+    ctx.moveTo(r * 0.52, -r * 0.44);
+    ctx.lineTo(r * 0.78, -r * 1.12);
+    ctx.stroke();
+    const blink = VIEW.anim && (animTime() % 1.7) < 0.16;
+    fillPath(ctx, dead ? '#4a2020' : blink ? '#ffe9a8' : alpha(color, 0.55));
+    circlePath(ctx, r * 0.78, -r * 1.12, Math.max(1.4, cell * 0.055));
+    ctx.fill();
+    if (!dead && blink) muzzleGlow(ctx, r * 0.78, -r * 1.12, cell * 0.22, '#ffd27a', 0.9);
+    ctx.restore();
+  }
+
+  if (replay) {
+    // Полоса урона: сервер отдаёт итог боя, а не HP штаба каждый тик, поэтому шкала
+    // интерполируется по времени и подписана как оценка, а не как факт.
+    const ratio = 1 - Math.min(1, Math.max(0, replay.hqRatioAt));
+    const bx = px(hq.x) + 1;
+    const by = px(hq.y) - 7;
+    const bw = cell - 2;
+    fillPath(ctx, 'rgba(0,0,0,.65)');
+    rrPath(ctx, bx, by, bw, 5, 2);
+    ctx.fill();
+    strokePath(ctx, 'rgba(255,255,255,.18)', 1);
+    ctx.stroke();
+    fillPath(ctx, ratio > 0.5 ? COLORS.hq : ratio > 0.2 ? COLORS.drone : COLORS.boom);
+    rrPath(ctx, bx + 0.5, by + 0.5, Math.max(0, (bw - 1) * ratio), 4, 2);
+    ctx.fill();
+  }
+}
+
+/** Радиус действия из cfg.pvp.defense[tier].range — той же цифры, по которой сервер считает бой. */
+function rangeOf(tier) {
+  const profiles = S.cfg ? S.cfg.pvp.defense : null;
+  if (!profiles) return 0;
+  const profile = profiles[String(tier)] || profiles['1'];
+  return profile && profile.range ? profile.range : 0;
+}
+
+function ringRange(ctx, cx, cy, r, focused) {
+  if (r <= 0) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = alpha(COLORS.pathEdge, focused ? 0.1 : 0.045);
+  ctx.fill();
+  ctx.setLineDash(focused ? [] : [4, 6]);
+  strokePath(ctx, alpha(COLORS.pathEdge, focused ? 0.75 : 0.3), focused ? 1.6 : 1);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawRanges(ctx, draft, occupied) {
+  if (!VIEW.ranges || !draft) return;
+  for (const unit of draft.units) {
+    const occupant = occupied.get(cellKey(unit.x, unit.y));
+    if (!occupant || occupant.kind !== 'unit') continue;
+    const focused = Boolean(S.hover && S.hover.x === unit.x && S.hover.y === unit.y);
+    ringRange(ctx, centerX(unit.x), centerY(unit.y), rangeOf(occupant.tier) * VIEW.cell, focused);
+  }
+  if (S.tool === 'tower' && S.picked && S.hover) {
+    const item = itemOf(S.picked);
+    if (item) ringRange(ctx, centerX(S.hover.x), centerY(S.hover.y), rangeOf(item.tier) * VIEW.cell, true);
+  }
+}
+
+/** Курсор: уголки клетки, а не залипка — чтобы не спорили с башней под ними. */
+function drawHover(ctx, analysis) {
+  if (!S.hover || !S.draft) return;
+  const { x, y } = S.hover;
+  const cell = VIEW.cell;
+  const bad = analysis ? !cellAllowed(S.draft, x, y) : false;
+  const left = px(x);
+  const top = px(y);
+  const arm = cell * 0.3;
+  ctx.save();
+  strokePath(ctx, bad ? alpha(COLORS.boom, 0.95) : 'rgba(223,242,255,.55)', 1.6);
+  ctx.beginPath();
+  ctx.moveTo(left + 1, top + 1 + arm); ctx.lineTo(left + 1, top + 1); ctx.lineTo(left + 1 + arm, top + 1);
+  ctx.moveTo(left + cell - 1 - arm, top + 1); ctx.lineTo(left + cell - 1, top + 1); ctx.lineTo(left + cell - 1, top + 1 + arm);
+  ctx.moveTo(left + cell - 1, top + cell - 1 - arm); ctx.lineTo(left + cell - 1, top + cell - 1); ctx.lineTo(left + cell - 1 - arm, top + cell - 1);
+  ctx.moveTo(left + 1 + arm, top + cell - 1); ctx.lineTo(left + 1, top + cell - 1); ctx.lineTo(left + 1, top + cell - 1 - arm);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Призрак будущего объекта: что именно появится в клетке по клику. */
+function drawGhost(ctx) {
+  if (!S.hover || !S.draft || S.replay) return;
+  const cell = VIEW.cell;
+  const { x, y } = S.hover;
+  const allowed = cellAllowed(S.draft, x, y);
+  const occupant = occupancy(S.draft).get(cellKey(x, y));
+  ctx.save();
+  fillPath(ctx, alpha(allowed ? COLORS.pathEdge : COLORS.boom, allowed ? 0.1 : 0.16));
+  rrPath(ctx, px(x) + 1, px(y) + 1, cell - 2, cell - 2, 4);
+  ctx.fill();
+  ctx.setLineDash([3, 3]);
+  strokePath(ctx, alpha(allowed ? '#dff2ff' : COLORS.boom, 0.6), 1.2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (allowed && S.tool === 'tower' && S.picked) {
+    const item = itemOf(S.picked);
+    ctx.globalAlpha = 0.55;
+    drawTurret(ctx, { kind: item ? item.kind : 'tower', tier: item ? item.tier : 1, level: 1, itemId: S.picked }, x, y);
+    ctx.globalAlpha = 1;
+  } else if (allowed && S.tool === 'wall') {
+    ctx.globalAlpha = 0.5;
+    drawWallSlab(ctx, x, y);
+    ctx.globalAlpha = 1;
+  } else if (S.tool === 'erase' && occupant) {
+    strokePath(ctx, alpha(COLORS.boom, 0.9), 2);
+    ctx.beginPath();
+    ctx.moveTo(px(x) + 4, px(y) + 4);
+    ctx.lineTo(px(x) + cell - 4, px(y) + cell - 4);
+    ctx.moveTo(px(x) + cell - 4, px(y) + 4);
+    ctx.lineTo(px(x) + 4, px(y) + cell - 4);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Разрешена ли клетка под новый объект — то, что сервер подтвердит (или нет) на сохранении. */
+function cellAllowed(draft, x, y) {
+  if (!inBounds(x, y)) return false;
+  if (isSpawn(x, y)) return false;
+  if (draft.hq.x === x && draft.hq.y === y) return false;
+  return !draft.walls.some((wall) => wall.x === x && wall.y === y) &&
+    !draft.units.some((unit) => unit.x === x && unit.y === y);
+}
+
+// ─── Строка состояния под полем ──────────────────────────────────────────────
+
+function renderAnalysis() {
+  const box = $('analysis');
+  if (!S.draft) { box.innerHTML = '<span class="muted">войдите, чтобы увидеть поле</span>'; return; }
+  const analysis = analyzeLayout(S.draft);
+  const parts = [];
+
+  parts.push(analysis.ok
+    ? '<span class="ok">проходимо</span>'
+    : '<span class="err">' + analysis.violations.map((code) => esc(issueText(code))).join('; ') + '</span>');
+  if (analysis.warnings.length) {
+    parts.push('<span class="warn">' + analysis.warnings.map((code) => esc(issueText(code))).join('; ') + '</span>');
+  }
+  parts.push('<span class="muted">худший подход: ' + (analysis.pathTiles < 0 ? 'нет пути' : analysis.pathTiles + ' кл') +
+    ' · ворота ' + analysis.connectedSpawns + '/' + analysis.totalSpawns +
+    ' · карманы: ' + analysis.orphans + '</span>');
+  if (S.dirty) parts.push('<span class="warn">не сохранено</span>');
+
+  const delta = layoutDelta(S.draft);
+  const cost = wallCost();
+  parts.push('<span class="muted">стен +' + delta.added + '/−' + delta.removed +
+    ' → ' + fmtNum(cost.ferrum * delta.added) + ' железа, ' + fmtNum(cost.black_metal * delta.added) + ' чёрмета</span>');
+
+  box.innerHTML = parts.join(' · ');
+}
+
+// ─── Редактор планировки ────────────────────────────────────────────────────
+/*
+ * Правки живут в S.draft до нажатия «Сохранить». Это не удобства ради: сервер
+ * принимает планировку целиком и сверяет `version`, поэтому любой черновик — это
+ * {version, hq, walls[], units[]}, а не поток «поставь клетку». Стоимость стен
+ * считает сервер (config/base.ts: 40 железа + 2 чёрмета за клетку, возврат ниже),
+ * здесь она только предсказывается по правилам из /v1/config.
+ */
+
+function layoutDelta(draft) {
+  const base = S.snap && S.snap.economy.base;
+  if (!base) return { added: 0, removed: 0 };
+  const before = new Set(base.walls.map((cellRef) => cellKey(cellRef.x, cellRef.y)));
+  const after = new Set(draft.walls.map((cellRef) => cellKey(cellRef.x, cellRef.y)));
+  let added = 0;
+  let removed = 0;
+  after.forEach((key) => { if (!before.has(key)) added += 1; });
+  before.forEach((key) => { if (!after.has(key)) removed += 1; });
+  return { added, removed };
+}
+
+function afterEdit() {
+  S.dirty = true;
+  draw();
+  renderAnalysis();
+  renderBasePanel();
+  renderInventory();
+}
+
+function applyTool(x, y, erase) {
+  const draft = S.draft;
+  if (!draft) return;
+  const tool = erase ? 'erase' : S.tool;
+  const wallIndex = draft.walls.findIndex((cellRef) => cellRef.x === x && cellRef.y === y);
+  const unitIndex = draft.units.findIndex((unit) => unit.x === x && unit.y === y);
+
+  if (tool === 'inspect') {
+    const occupant = occupancy(draft).get(cellKey(x, y));
+    if (occupant && occupant.kind === 'unit') log('башня ' + occupant.name + ' · тир ' + occupant.tier + ' · L' + occupant.level + ' · ' + x + ',' + y);
+    else if (occupant) log('стена ' + x + ',' + y + ' · снос вернёт часть материалов');
+    else if (isSpawn(x, y)) log('ворота роботов — их не двигает игрок, только сервер');
+    else if (isHqPad(x, y)) log('площадка штаба · инструмент «Штаб» переносит его сюда');
+    return;
+  }
+
+  if (tool === 'erase') {
+    if (unitIndex >= 0) { draft.units.splice(unitIndex, 1); afterEdit(); log('снято с карты (вернётся в инвентарь)'); return; }
+    if (wallIndex >= 0) { draft.walls.splice(wallIndex, 1); afterEdit(); return; }
+    return;
+  }
+
+  if (tool === 'wall') {
+    if (unitIndex >= 0) { log('клетка занята башней — сначала снимите её', 'err'); return; }
+    if (wallIndex >= 0) { draft.walls.splice(wallIndex, 1); afterEdit(); return; }
+    if (!cellAllowed(draft, x, y)) { log('клетка недоступна: ворота, штаб или чужой объект', 'err'); return; }
+    if (draft.walls.length >= geo().wall.max) { log('потолок стен ' + geo().wall.max + ' исчерпан', 'err'); return; }
+    draft.walls.push({ x, y });
+    afterEdit();
+    return;
+  }
+
+  if (tool === 'tower') {
+    if (wallIndex >= 0) { log('на стене башню не ставить — снесите клетку', 'err'); return; }
+    if (unitIndex >= 0) { draft.units.splice(unitIndex, 1); afterEdit(); log('башня снята с карты'); return; }
+    if (!S.picked) { log('выберите башню в инвентаре (кнопка «на карту»)', 'err'); return; }
+    if (!cellAllowed(draft, x, y)) { log('клетка недоступна', 'err'); return; }
+    if (draft.units.length >= geo().units.max) { log('потолок единиц на карте ' + geo().units.max, 'err'); return; }
+    draft.units.push({ itemId: S.picked, x, y });
+    const next = deployable()[0];
+    S.picked = next ? next.id : null;
+    afterEdit();
+    return;
+  }
+
+  if (tool === 'hq') {
+    if (!isHqPad(x, y)) { log('штаб ставится только на площадку (пунктирные клетки)', 'err'); return; }
+    if (occupancy(draft).has(cellKey(x, y))) { log('на площадке уже что-то стоит — уберите', 'err'); return; }
+    draft.hq = { x, y };
+    afterEdit();
+  }
+}
+
+async function saveLayout() {
+  if (!S.draft) return;
+  const payload = {
+    version: S.draft.version,
+    hq: { x: S.draft.hq.x, y: S.draft.hq.y },
+    walls: S.draft.walls.map((cellRef) => ({ x: cellRef.x, y: cellRef.y })),
+    units: S.draft.units.map((unit) => ({ itemId: unit.itemId, x: unit.x, y: unit.y }))
+  };
+  S.dirty = false;
+  try {
+    const result = await api('PUT', '/v1/base/layout', payload);
+    const summary = result.result;
+    log('сохранено: версия ' + summary.version +
+      ' · стен +' + summary.wallsAdded + '/−' + summary.wallsRemoved +
+      ' · башень поставлено ' + summary.unitsDeployed + ', снято ' + summary.unitsRecalled +
+      ' · списано ' + JSON.stringify(summary.charged || {}) +
+      (summary.refunded && Object.keys(summary.refunded).length ? ', возвращено ' + JSON.stringify(summary.refunded) : ''),
+      summary.report && summary.report.ok ? 'ok' : 'warn');
+    if (summary.report && !summary.report.ok) {
+      log('сервер считает планировку непроходимой: ' + (summary.report.notices || []).join(', '), 'err');
+    }
+  } catch (error) {
+    S.dirty = true;
+    log('сохранение отклонено: ' + error.message, 'err');
+    renderAnalysis();
+  }
+}
+
+async function clearLayout() {
+  try {
+    S.dirty = false;
+    const result = await api('DELETE', '/v1/base/layout');
+    log('планировка сброшена · отчёт: ' + JSON.stringify((result.result.report && result.result.report.notices) || []), 'warn');
+  } catch (error) {
+    log('сброс: ' + error.message, 'err');
+  }
+}
+
+function revertLayout() {
+  S.dirty = false;
+  syncDraftFromView();
+  draw();
+  renderAll();
+  log('черновик отменён до серверной версии ' + (S.draft ? S.draft.version : '—'));
+}
+
+// ─── Мышь поля ───────────────────────────────────────────────────────────────
+
+function cellFromEvent(event) {
+  const box = $('cv').getBoundingClientRect();
+  const x = Math.floor((event.clientX - box.left - VIEW.pad) / VIEW.cell);
+  const y = Math.floor((event.clientY - box.top - VIEW.pad) / VIEW.cell);
+  return inBounds(x, y) ? { x, y } : null;
+}
+
+const TOOL_HINT = {
+  inspect: 'ЛКМ — узнать, что в клетке',
+  wall: 'ЛКМ — поставить стену, ПКМ — снести',
+  tower: 'ЛКМ — поставить выбранную башню, ПКМ — снять',
+  hq: 'ЛКМ по пунктирной площадке — перенести штаб',
+  erase: 'ЛКМ — снять стену или башню'
+};
+
+function bindBoard() {
+  const cv = $('cv');
+  cv.addEventListener('mousedown', (event) => {
+    if (S.replay) return;                 // во время реплея поле — зрительский зал
+    const cellRef = cellFromEvent(event);
+    if (cellRef) applyTool(cellRef.x, cellRef.y, event.button === 2);
+  });
+  cv.addEventListener('mousemove', (event) => {
+    const cellRef = cellFromEvent(event);
+    if (JSON.stringify(cellRef) === JSON.stringify(S.hover)) return;
+    S.hover = cellRef;
+    if (!S.replay) draw();
+  });
+  cv.addEventListener('mouseleave', () => { S.hover = null; if (!S.replay) draw(); });
+  cv.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    const cellRef = cellFromEvent(event);
+    if (cellRef && !S.replay) applyTool(cellRef.x, cellRef.y, true);
+  });
+
+  for (const button of document.querySelectorAll('#toolbar button[data-tool]')) {
+    button.addEventListener('click', () => {
+      selectTool(button.dataset.tool);
+      draw();
+    });
+  }
+}
+
+// ─── Панели справа ───────────────────────────────────────────────────────────
+/*
+ * Кнопки вешаются через window.TD: панели перерисовываются целиком после каждого
+ * ответа сервера, и ловить обработчики на уничтоженных узлах — верный способ
+ * получить «кнопка мёртва после первого клика».
+ */
+
+function renderBasePanel() {
+  const tag = $('baseTag');
+  const body = $('baseBody');
+  if (!S.draft) { tag.textContent = '—'; body.innerHTML = '<span class="muted">—</span>'; return; }
+  const base = S.snap.economy.base;
+  const analysis = analyzeLayout(S.draft);
+  const delta = layoutDelta(S.draft);
+  const cost = wallCost();
+
+  tag.innerHTML = 'v' + base.version + (S.dirty ? ' <span class="warn">•</span>' : '');
+  body.innerHTML =
+    '<table>' +
+    row('стены', base.walls.length + ' → ' + S.draft.walls.length + ' / ' + geo().wall.max) +
+    row('башни', S.draft.units.length + ' / ' + geo().units.max) +
+    row('цена клетки', fmtNum(cost.ferrum) + ' железа + ' + fmtNum(cost.black_metal) + ' чёрмета') +
+    row('изменение', '+' + delta.added + ' / −' + delta.removed +
+      ' → ' + fmtNum(cost.ferrum * delta.added) + ' ⛏ ' + fmtNum(cost.black_metal * delta.added) + ' ■') +
+    row('проходимость', analysis.ok ? '<span class="ok">да</span>' : '<span class="err">' + analysis.violations.map((code) => esc(issueText(code))).join('; ') + '</span>') +
+    row('сервер говорит', (base.report.notices || []).length ? esc(base.report.notices.join(', ')) : '<span class="muted">чисто</span>') +
+    '</table>' +
+    '<div class="row" style="margin-top:8px">' +
+    '<button ' + (S.dirty ? '' : 'disabled') + ' onclick="TD.save()">Сохранить</button>' +
+    '<button ' + (S.dirty ? '' : 'disabled') + ' onclick="TD.revert()">Отменить</button>' +
+    '<button class="err" onclick="TD.clear()">Снять всё</button>' +
+    '</div>' +
+    '<p class="hint">Синяя линия — худший из кратчайших маршрутов от ворот до штаба. Чем длиннее, тем больше времени у башен.</p>';
+}
+
+function row(label, value) {
+  return '<tr><td class="muted">' + esc(label) + '</td><td>' + value + '</td></tr>';
+}
+
+function renderInventory() {
+  const tag = $('invTag');
+  const body = $('invBody');
+  if (!S.snap) { body.innerHTML = '<span class="muted">—</span>'; return; }
+  const inventory = S.snap.economy.inventory;
+  const placed = new Map((S.draft ? S.draft.units : []).map((unit) => [unit.itemId, unit]));
+  const kinds = S.cfg.base.units.deployableKinds;
+  const attackKinds = S.cfg.pvp.attack.kinds;
+  tag.textContent = inventory.length + ' шт.';
+
+  if (inventory.length === 0) {
+    body.innerHTML = '<span class="muted">пусто — соберите первое в мастерской</span>';
+    return;
+  }
+
+  const rows = inventory.map((item) => {
+    const onMap = placed.get(item.id);
+    const role = attackKinds.includes(item.kind) ? 'атака' : kinds.includes(item.kind) ? 'оборона' : item.kind;
+    const actions = [];
+    if (kinds.includes(item.kind)) {
+      actions.push(onMap
+        ? '<span class="pill">на карте ' + onMap.x + ',' + onMap.y + '</span>'
+        : '<button onclick="TD.pick(\'' + item.id + '\')">на карту</button>');
+    }
+    if (S.picked === item.id) actions.push('<span class="pill ok">выбрана</span>');
+    actions.push('<button onclick="TD.dismantle(\'' + item.id + '\')">разобрать</button>');
+    return '<tr><td>' + esc(item.name) + ' <span class="muted">T' + item.tier + ' L' + item.level + ' · ' + role + '</span></td>' +
+      '<td class="num">' + actions.join(' ') + '</td></tr>';
+  }).join('');
+
+  body.innerHTML = '<table>' + rows + '</table>';
+}
+
+function costText(cost) {
+  const entries = Object.entries(cost || {});
+  if (entries.length === 0) return '—';
+  return entries.map(([material, amount]) => fmtNum(amount) + ' ' + material).join(', ');
+}
+
+function renderShop() {
+  const tag = $('shopTag');
+  const body = $('shopBody');
+  if (!S.snap) { body.innerHTML = '<span class="muted">—</span>'; return; }
+  const eco = S.snap.economy;
+  const builders = eco.builders;
+  tag.textContent = 'занято ' + builders.busy + '/' + builders.max;
+
+  const options = S.blueprints
+    ? S.blueprints.blueprints.map((blueprint) => '<option value="' + esc(blueprint.code) + '">' +
+      esc(blueprint.name) + ' · T' + blueprint.tier + ' · ' + blueprint.kind + ' · ' + fmtMs(blueprint.buildMs) + '</option>').join('')
+    : '<option>загрузка…</option>';
+
+  const queue = eco.builds.length
+    ? '<table>' + eco.builds.map((job) => '<tr><td>' + esc(job.name) + ' <span class="muted">L' + job.level + '</span></td>' +
+      '<td class="num">' + (job.done ? '<span class="ok">готово, инвентарь забит</span>' : fmtMs(job.remainingMs)) + '</td>' +
+      '<td class="num"><button onclick="TD.speedup(\'' + job.id + '\')">добить</button></td></tr>').join('') + '</table>'
+    : '<div class="muted">очередь пуста</div>';
+
+  const all = eco.speedup.all || {};
+  body.innerHTML =
+    '<div class="row"><select id="bpSelect" style="flex:1">' + options + '</select>' +
+    '<button onclick="TD.build()">Строить</button></div>' +
+    '<div class="muted" id="bpCost" style="margin-bottom:8px"></div>' +
+    queue +
+    '<div class="row" style="margin-top:8px"><button onclick="TD.speedupAll()">Ускорить всё' +
+    (all.cost != null ? ' (' + all.cost + ' хроний)' : '') + '</button>' +
+    '<span class="pill">' + eco.materials.chronium + ' хроний</span></div>' +
+    '<p class="hint">Слоты строителя: ' + builders.free + ' свободен(о), следующий слот ' +
+    (builders.nextPrice == null ? 'не продаётся' : builders.nextPrice + ' астерия') + '.</p>';
+
+  const showCost = () => {
+    const code = $('bpSelect').value;
+    const blueprint = S.blueprints && S.blueprints.blueprints.find((item) => item.code === code);
+    $('bpCost').textContent = blueprint ? 'нужно: ' + costText(blueprint.cost) : '';
+  };
+  $('bpSelect').addEventListener('change', showCost);
+  showCost();
+}
+
+function renderEconomy() {
+  const tag = $('ecoTag');
+  const body = $('ecoBody');
+  if (!S.snap) { body.innerHTML = '<span class="muted">—</span>'; return; }
+  const eco = S.snap.economy;
+  tag.textContent = 'кап ' + fmtNum(eco.storageCapacity);
+
+  const rows = eco.warehouses.map((warehouse) => '<tr><td>' + esc(warehouse.resource) + '</td>' +
+    '<td class="num">' + fmtNum(warehouse.stored) + '/' + fmtNum(warehouse.capacity) + '</td>' +
+    '<td class="num">' + fmtNum(warehouse.ratePerHour) + '/ч</td>' +
+    '<td class="num">' + (warehouse.isFull ? '<span class="ok">полон</span>' : Math.round(warehouse.fillRatio * 100) + '%') + '</td>' +
+    '<td class="num muted">' + (warehouse.nextFillAt ? fmtMs(new Date(warehouse.nextFillAt).getTime() - Date.now()) : '—') + '</td></tr>').join('');
+
+  body.innerHTML =
+    '<table><tr><th>склад</th><th class="num">есть</th><th class="num">ставка</th><th class="num">заполн.</th><th class="num">через</th></tr>' + rows + '</table>' +
+    '<div class="row" style="margin-top:8px"><button onclick="TD.collect()">Собрать склад</button>' +
+    '<button onclick="TD.assist()">Помощь друга (+' + eco.energy.assist.units + '⚡)</button>' +
+    '<span class="pill">' + eco.energy.assist.usedToday + '/' + eco.energy.assist.limitPerDay + ' сегодня</span></div>' +
+    '<p class="hint">Энергия ' + eco.energy.value + '/' + eco.energy.cap + ', реген ' +
+    fmtNum(eco.energy.regenPerHour) + '/ч' + (eco.energy.fullAt ? ', полон через ' + fmtMs(new Date(eco.energy.fullAt).getTime() - Date.now()) : '') +
+    '. Собрать выгодно перед рейдом: трофеи считают по несобранным складам.</p>';
+}
+
+// ─── Энергосеть и сооружения ─────────────────────────────────────────────────
+
+/**
+ * Витрина сети: состояние, а не накопленный запас.
+ *
+ * Сервер пересчитывает `power` замкнутой формулой на КАЖДОМ запросе (шапка
+ * modules/economy/power.ts: «мощность — не запас»), поэтому здесь нет никакой
+ * локальной математики, кроме форматирования. Любая попытка «докрутить резерв между
+ * опросами» завела бы второй источник правды ровно на том поле, по которому игрок
+ * решает, строить ли ещё ASIC-стойку, — и разошлась бы с сервером на первом же
+ * веере.
+ *
+ * Причину отключения показываем дословно из `row.reason`: бинарный веер обязан быть
+ * объяснимым одним словом, иначе «КПД 73%» вернётся в голову игрока под другим
+ * именем.
+ */
+function renderPower() {
+  const tag = $('pwrTag');
+  const body = $('pwrBody');
+  if (!S.snap) { tag.innerHTML = '&mdash;'; body.innerHTML = '<span class="muted">&mdash;</span>'; return; }
+  const eco = S.snap.economy;
+  const p = eco.power;
+
+  const ok = (v) => '<span class="ok">' + v + '</span>';
+  const bad = (v) => '<span class="err">' + v + '</span>';
+  const WHY = { fuel: 'нет топлива', power: 'нет мощности', cooling: 'нет азота', output: 'некуда лить' };
+
+  tag.innerHTML = p.isBalanced ? ok('баланс') : bad('дефицит');
+
+  const nodes = (p.rows || []).map((r) =>
+    '<tr><td>' + esc(r.name) + (r.source === 'unit' ? ' <span class="muted">(техника)</span>' : '') + '</td>' +
+    '<td class="num">' + r.online + '/' + r.instances + '</td>' +
+    '<td class="num">' + (r.reason ? bad(WHY[r.reason] || r.reason) : ok('в строю')) + '</td></tr>').join('');
+
+  const buildings = (eco.structures || []).map((s) =>
+    '<tr><td>' + esc(s.name) + ' <span class="muted">T' + s.tier + '</span>' +
+    (s.unlocked ? '' : ' <span class="err" title="не выполнен предшественник">🔒</span>') + '</td>' +
+    '<td class="num">' + s.count + '</td>' +
+    '<td class="num muted">' + (s.power >= 0 ? '+' : '') + fmtNum(s.power) + '</td>' +
+    '<td class="num muted">' + fmtNum(s.heat) + '</td>' +
+    '<td class="num"><button' + (s.unlocked ? '' : ' disabled') +
+    ' onclick="TD.buildStructure(\'' + s.id + '\')">строить</button></td></tr>').join('');
+
+  body.innerHTML =
+    '<table>' +
+    row('мощность, кВт', fmtNum(p.supplyOnline) + ' ген / ' + fmtNum(p.demandOnline) + ' потр · резерв ' +
+      (p.reserve > 0 ? ok(fmtNum(p.reserve)) : bad('0'))) +
+    row('тепло, кВт', fmtNum(p.heatLoad) + ' / ' + fmtNum(p.coolingCap) +
+      (p.starvedCooling ? ' · ' + bad('кулерам нет азота') : '')) +
+    row('азот', fmtNum(p.nitrogenPerHour) + '/ч') +
+    row('SEC', '+' + fmtNum(p.secPerHour) + '/ч · в кошельке ' + fmtNum(eco.resources.secSpendable)) +
+    '</table>' +
+    (nodes
+      ? '<table><tr><th>узел</th><th class="num">онлайн</th><th class="num">причина</th></tr>' + nodes + '</table>'
+      : '<div class="muted" style="margin:6px 0">сеть пуста: постройте плазменный конвертер</div>') +
+    '<table><tr><th>сооружение</th><th class="num">шт</th><th class="num">кВт</th><th class="num">тепло</th><th class="num"></th></tr>' +
+    buildings + '</table>' +
+    '<p class="hint">Веер бинарный: стойка либо стоит, либо глуха — никакого «работает на 73%». ' +
+    'Глухая башня остаётся на карте и принимает урон, но не стреляет; тяжёлая техника ' +
+    'горит дейтерием, а не электричеством базы.</p>';
+}
+
+function renderDefense() {
+  const tag = $('defTag');
+  const body = $('defBody');
+  if (!S.snap) { body.innerHTML = '<span class="muted">—</span>'; return; }
+  const field = S.snap.economy.materials.staniumField;
+  tag.innerHTML = field.active ? '<span class="ok">' + fmtMs(field.remainingMs) + '</span>' : 'выключено';
+
+  body.innerHTML =
+    '<table>' +
+    row('станиум', S.snap.economy.materials.stanium) +
+    row('множитель атакующих', field.speedMultiplier + ' (−' + field.slowPercent + '% скорости)') +
+    row('1 единица =', fmtMs(field.msPerUnit) + ', потолок ' + fmtMs(field.maxMs)) +
+    '</table>' +
+    '<div class="row" style="margin-top:8px"><input type="number" id="staniumUnits" value="4" min="1">' +
+    '<button onclick="TD.charge()">Зарядить</button></div>' +
+    '<p class="hint">Поле действует в момент рейда на вашу базу и замедляет дроны соперника: ' +
+    'срок проверяется сервером по времени боя, а не по времени постройки.</p>';
+}
+
+// ─── PvP ─────────────────────────────────────────────────────────────────────
+
+function renderPvp() {
+  const tag = $('pvpTag');
+  const body = $('pvpBody');
+  if (!S.snap) { body.innerHTML = '<span class="muted">—</span>'; return; }
+  const pvp = S.snap.economy.pvp;
+  const roster = drones();
+  tag.textContent = pvp.rating + ' · ' + pvp.ladder.name;
+
+  const opponentCard = S.opponent
+    ? '<table>' +
+      row('соперник', esc(S.opponent.label)) +
+      row('рейтинг', String(S.opponent.rating)) +
+      row('оборона', S.opponent.units + ' башен · ' + S.opponent.walls + ' стен') +
+      row('проходимость', S.opponent.report && S.opponent.report.ok ? '<span class="ok">да</span>' : '<span class="err">' + esc(((S.opponent.report || {}).notices || []).join(', ')) + '</span>') +
+      '</table>'
+    : '<div class="muted">соперник не найден — кнопка слева</div>';
+
+  const army = roster.length
+    ? '<div class="list"><table>' + roster.map((item) => '<tr><td><label><input type="checkbox" data-army="' + item.id + '"' +
+      (S.armySel[item.id] ? ' checked' : '') + '> ' + esc(item.name) + '</label> ' +
+      '<span class="muted">T' + item.tier + ' L' + item.level + '</span></td>' +
+      '<td class="num muted">рой раскроет сервер</td></tr>').join('') + '</table></div>' +
+      '<div class="row"><button onclick="TD.armyAll(true)">все</button><button onclick="TD.armyAll(false)">снять</button></div>'
+    : '<div class="muted">дронов нет — соберите их в мастерской (вид drone)</div>';
+
+  body.innerHTML =
+    '<div class="row"><button onclick="TD.find()">Найти соперника</button>' +
+    '<span class="pill">атак сегодня: ' + pvp.attacksRemaining + ' · ' + pvp.attackCost + '⚡ за рейд</span></div>' +
+    opponentCard +
+    '<div style="margin-top:8px">' + army + '</div>' +
+    '<div class="row" style="margin-top:8px"><button onclick="TD.raid()">В атаку</button>' +
+    '<span class="pill">боёв: ' + pvp.battles + ' (+' + pvp.wins + '/=' + pvp.draws + '/−' + pvp.losses + ')</span></div>' +
+    '<p class="hint">Состав армии клиент не считает: сервер берёт боевые цифры из инвентаря по id предметов. ' +
+    'Бой возвращается кадром событий — он и проигрывается на поле слева.</p>';
+}
+
+async function findOpponent() {
+  try {
+    const result = await api('GET', '/v1/pvp/opponent');
+    S.opponent = result.opponent;
+    renderPvp();
+    log('соперник: ' + S.opponent.label + ' · рейтинг ' + S.opponent.rating, 'ok');
+  } catch (error) {
+    log('подбор: ' + error.message, 'err');
+  }
+}
+
+function setArmyAll(value) {
+  for (const item of drones()) S.armySel[item.id] = value;
+  renderPvp();
+}
+
+async function raid() {
+  if (!S.opponent) { log('сначала найдите соперника', 'err'); return; }
+  const selected = Object.keys(S.armySel).filter((id) => S.armySel[id]);
+  if (selected.length === 0) { log('не выбран ни один дрон', 'err'); return; }
+  try {
+    const result = await api('POST', '/v1/pvp/raid', { defenderId: S.opponent.defenderId, armyItemIds: selected });
+    const battle = result.result.battle;
+    S.armySel = {};
+    log('бой: ' + battle.outcome + ' · ' + battle.endedBy + ' · тиков ' + battle.ticks +
+      ' · уничтожено ' + battle.destroyed + ' · трофеи ' + JSON.stringify(result.result.stolen || {}),
+      battle.outcome === 'win' ? 'ok' : battle.outcome === 'draw' ? 'warn' : 'err');
+    startReplay(result.result, battle);
+  } catch (error) {
+    log('рейд: ' + error.message, 'err');
+  }
+}
+
+// ─── Проигрыватель боя ───────────────────────────────────────────────────────
+/*
+ * Источник правды — battle.timeline: серверные кадры событий (tick, atMs, type,
+ * cell, itemId, hp). Сервер намеренно не отдаёт позиции каждой машины каждый тик
+ * (потолок кадров, иначе реплей раздувает ответ HTTP), поэтому здесь честно то,
+ * что данными подтверждено:
+ *
+ *   • момент и клетка вылета каждой машины — событие spawn;
+ *   • момент гибели — robot_lost / wall_down / unit_down;
+ *   • маршрут по лабиринту соперника — analysis.path из отчёта матчмейкинга (тот
+ *     самый худший подход, который считает серверный BFS);
+ *   • скорость и радиус — profile из ответа рейда (server/src/config/pvp.ts),
+ *     умноженные на battle.attackerSpeedMultiplier, если база была под станиумом.
+ *
+ * Чего нет: HP отдельных дронов и оборонительных клеток, которые пережили бой.
+ * Их интерфейс не дорисовывает — вместо этого пишет об этом прямым текстом.
+ */
+
+function startReplay(result, battle) {
+  const timeline = (battle.timeline || []).slice().sort((a, b) => a.tick - b.tick || a.type.localeCompare(b.type));
+  const profiles = new Map();
+  for (const squad of result.army.squads) profiles.set(squad.itemId, squad.profile);
+
+  const hqEvent = timeline.find((event) => event.type === 'hq_down');
+  const path = S.opponent && S.opponent.report && S.opponent.report.analysis
+    ? S.opponent.report.analysis.path
+    : null;
+  const hq = hqEvent ? hqEvent.cell
+    : path && path.length ? path[path.length - 1]
+    : geo().defaultHq;
+
+  S.replay = {
+    result,
+    battle,
+    profiles,
+    timeline,
+    hq,
+    route: path && path.length > 1 ? path : null,
+    duration: Math.max(1, battle.durationMs),
+    tickMs: S.cfg.pvp.sim.tickMs,
+    speed: battle.attackerSpeedMultiplier || 1,
+    truncated: timeline.length === 0 || timeline[timeline.length - 1].type !== 'end',
+    t: 0,
+    cursor: 0,
+    playing: false,
+    rate: 1,
+    drones: [],
+    wrecks: [],
+    booms: [],
+    hqDown: false,
+    hqRatioAt: 1,
+    seq: 0
+  };
+
+  resetReplayState();
+  bindReplayControls();
+  draw();
+  renderReplayInfo();
+  log('реплей готов: ' + timeline.length + ' кадров · ' + battle.ticks + ' тиков × ' + S.cfg.pvp.sim.tickMs + ' мс' +
+    (S.replay.truncated ? ' (потолок кадров обрезал хвост)' : ''), S.replay.truncated ? 'warn' : '');
+}
+
+function resetReplayState() {
+  const replay = S.replay;
+  replay.t = 0;
+  replay.cursor = 0;
+  replay.drones = [];
+  replay.wrecks = [];
+  replay.booms = [];
+  replay.hqDown = false;
+  replay.hqRatioAt = 1;
+  replay.seq = 0;
+  // Частицы живут только при прямом проигрывании: перемотка обязана начинать с чистого
+  // поля, иначе дым взрыва, которого на выбранном моменте ещё не было, висел бы над картой.
+  clearFx();
+}
+
+/** Продвигает состояние реплея до момента toMs, применяя кадры событий по порядку. */
+function seekReplay(toMs) {
+  const replay = S.replay;
+  resetReplayState();
+  while (replay.cursor < replay.timeline.length && replay.timeline[replay.cursor].atMs <= toMs) {
+    applyEvent(replay, replay.timeline[replay.cursor]);
+    replay.cursor += 1;
+  }
+  replay.t = toMs;
+  replay.hqRatioAt = Math.max(0, 1 - replay.battle.hq.ratio * Math.min(1, toMs / replay.duration));
+  syncDronePositions(replay);
+}
+
+/**
+ * Один кадр таймлайна → состояние поля.
+ *
+ * `emit` — признак живого проигрывания: частицы сыпятся только когда бой идёт напрямую.
+ * При перемотке их нет: переиграть бой заново нельзя, а след взрыва обязан соответствовать
+ * моменту на экране, а не количеству кликов по скрабберу.
+ */
+function applyEvent(replay, event, emit) {
+  const cell = event.cell;
+  if (event.type === 'spawn') {
+    const profile = replay.profiles.get(event.itemId);
+    replay.drones.push({
+      id: (replay.seq += 1),
+      bornAt: event.atMs,
+      code: profile ? profile.code : '',
+      name: profile ? profile.name : event.itemId,
+      tier: profile ? profile.tier : 1,
+      speed: (profile ? profile.speed : 1) * replay.speed,
+      range: profile ? profile.range : 0,
+      routeOffset: routeOffsetFor(replay, cell),
+      travelled: 0,
+      x: cell ? cell.x : replay.hq.x,
+      y: cell ? cell.y : replay.hq.y,
+      fx: cell ? cell.x : replay.hq.x,
+      fy: cell ? cell.y : replay.hq.y,
+      px: cell ? cell.x : replay.hq.x,
+      py: cell ? cell.y : replay.hq.y,
+      walked: 0,
+      alive: true
+    });
+    if (emit && cell) spawnFlash(cell.x, cell.y, 0, COLORS.spawnEdge, 0.4);
+    return;
+  }
+  if (event.type === 'robot_lost') {
+    const victim = nearestLiveDrone(replay, cell);
+    if (victim) {
+      victim.alive = false;
+      replay.booms.push({ x: victim.fx, y: victim.fy, at: replay.t, kind: 'drone' });
+      if (emit) {
+        spawnRing(victim.fx, victim.fy, COLORS.drone, 0.7, 0.34);
+        spawnEmbers(victim.fx, victim.fy, 8, droneArtOf(victim.code, victim.tier).hue);
+        spawnDebris(victim.fx, victim.fy, 5, MAT.steelDark);
+      }
+    }
+    return;
+  }
+  if (event.type === 'wall_down' || event.type === 'unit_down') {
+    // Клетка здесь обязательна по контракту сервера (`hitTower`/`hitWall` всегда несут
+    // `cellCoord`), но её отсутствие не имеет права валить весь реплей: `spawn`,
+    // `robot_lost`, `overheat` и `routeOffsetFor` уже работают без клетки, и пасть на
+    // одном кадре из-за четвёртого — несоразмерная цена. Без координат обломка нет.
+    if (!cell) return;
+    const isWall = event.type === 'wall_down';
+    replay.wrecks.push({ x: cell.x, y: cell.y, kind: isWall ? 'wall' : 'unit', at: event.atMs });
+    replay.booms.push({ x: cell.x, y: cell.y, at: event.atMs, kind: isWall ? 'wall' : 'unit' });
+    if (emit) {
+      spawnRing(cell.x, cell.y, COLORS.boom, isWall ? 0.85 : 1.15, isWall ? 0.38 : 0.5);
+      spawnDebris(cell.x, cell.y, isWall ? 7 : 11, isWall ? MAT.concrete : MAT.steel);
+      spawnEmbers(cell.x, cell.y, isWall ? 5 : 9, COLORS.boom);
+      spawnSmoke(cell.x, cell.y, isWall ? 3 : 5, '#2f353d', 0);
+    }
+    return;
+  }
+  if (event.type === 'hq_down') {
+    replay.hqDown = true;
+    if (emit) {
+      spawnRing(replay.hq.x, replay.hq.y, COLORS.boom, 2.4, 0.85);
+      spawnDebris(replay.hq.x, replay.hq.y, 18, MAT.concrete);
+      spawnEmbers(replay.hq.x, replay.hq.y, 16, COLORS.boom);
+      spawnSmoke(replay.hq.x, replay.hq.y, 10, '#2f353d', 0);
+    }
+    return;
+  }
+  // Ствол ушёл в упор и остыл — сервер фиксирует это кадрами, значит дым из люльки и
+  // вспышка остывания законны: это следствие боя, а не украшение от клиента.
+  if (event.type === 'overheat' && cell && emit) spawnSmoke(cell.x, cell.y, 3, '#4a525c', 0);
+  if (event.type === 'cooled' && cell && emit) spawnFlash(cell.x, cell.y, 0, COLORS.hq, 0.3);
+}
+
+/**
+ * Где воротины дрона ложатся на маршрут: совпали с началом трассы — 0, иначе —
+ * ближайшее звено. Без этого дроны с разных ворот шли бы по одному и тому же
+ * пути, и бой выглядел бы колонной.
+ */
+function routeOffsetFor(replay, cell) {
+  if (!replay.route) return 0;
+  if (!cell) return 0;
+  let best = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  replay.route.forEach((node, index) => {
+    const distance = Math.abs(node.x - cell.x) + Math.abs(node.y - cell.y);
+    if (distance < bestDistance) { bestDistance = distance; best = index; }
+  });
+  return best;
+}
+
+function nearestLiveDrone(replay, cell) {
+  let best = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const drone of replay.drones) {
+    if (!drone.alive) continue;
+    const distance = cell ? Math.abs(drone.fx - cell.x) + Math.abs(drone.fy - cell.y) : 0;
+    if (distance < bestDistance) { bestDistance = distance; best = drone; }
+  }
+  return best;
+}
+
+/**
+ * Сколько клеток пройдено к моменту t. Одна формула и для покадрового хода, и для
+ * перемотки скраббером: позиция дрона — функция времени, а не накопленная сумма
+ * дельт. Иначе перемотка назад давала бы бой, которого сервер не считал.
+ */
+function routeLimit(drone, replay) {
+  if (replay.route) return Math.max(0, replay.route.length - 1 - drone.routeOffset);
+  return Math.max(1, Math.hypot(replay.hq.x - drone.x, replay.hq.y - drone.y));
+}
+
+function syncDronePositions(replay) {
+  for (const drone of replay.drones) {
+    if (!drone.alive) continue;
+    const travelled = Math.min(routeLimit(drone, replay), drone.speed * Math.max(0, (replay.t - drone.bornAt) / 1000));
+    drone.travelled = travelled;
+    const point = interpolate(drone, replay);
+    // Прежняя точка нужна ради курса: разворот по вектору шага — это вираж, а не
+    // мгновенная смена носа. При перемотке шаг искусственный (сразу несколько клеток),
+    // поэтому курс тогда не берём — машина смотрит на штаб (см. droneHeading).
+    if (replay.playing) { drone.px = drone.fx; drone.py = drone.fy; }
+    drone.fx = point.x;
+    drone.fy = point.y;
+  }
+}
+
+function interpolate(drone, replay) {
+  if (!replay.route) {
+    const total = routeLimit(drone, replay);
+    const ratio = Math.min(1, drone.travelled / total);
+    return { x: drone.x + (replay.hq.x - drone.x) * ratio, y: drone.y + (replay.hq.y - drone.y) * ratio };
+  }
+  const index = Math.min(replay.route.length - 1, drone.routeOffset + drone.travelled);
+  const floor = Math.floor(index);
+  const from = replay.route[floor] || replay.hq;
+  const to = replay.route[Math.min(replay.route.length - 1, floor + 1)] || from;
+  const frac = index - floor;
+  return { x: from.x + (to.x - from.x) * frac, y: from.y + (to.y - from.y) * frac };
+}
+
+function advanceReplay(deltaMs) {
+  const replay = S.replay;
+  const next = Math.min(replay.duration, replay.t + deltaMs);
+  while (replay.cursor < replay.timeline.length && replay.timeline[replay.cursor].atMs <= next) {
+    applyEvent(replay, replay.timeline[replay.cursor], true);
+    replay.cursor += 1;
+  }
+  replay.t = next;
+  replay.hqRatioAt = Math.max(0, 1 - replay.battle.hq.ratio * Math.min(1, next / replay.duration));
+  replay.booms = replay.booms.filter((boom) => next - boom.at < 600);
+  syncDronePositions(replay);
+  $('rpScrub').value = String(Math.round(next));
+}
+
+/**
+ * Поверх поля — только то, что подтверждено кадрами боя.
+ *
+ * Маршрут здесь не рисуется: paintStatic передаёт replay.route в террейн, и повторная
+ * линия поверх дороги только замусорила бы трассу.
+ */
+function drawReplayField(ctx, replay) {
+  for (const wreck of replay.wrecks) drawWreck(ctx, wreck);
+  for (const boom of replay.booms) drawBoomRing(ctx, boom, replay);
+  drawHq(ctx, replay.hq, replay);
+  for (const drone of replay.drones) {
+    if (drone.alive) drawDrone(ctx, drone, replay);
+  }
+}
+
+/**
+ * Кольцо ударной волны привязано к игровому времени, а не к числу кадров: перемотка
+ * показывает ровно тот взрыв, который случился на этом участке боя, даже когда
+ * частицы уже сброшены.
+ */
+function drawBoomRing(ctx, boom, replay) {
+  const age = Math.min(1, (replay.t - boom.at) / 600);
+  if (age >= 1) return;
+  ctx.save();
+  ctx.globalAlpha = 1 - age;
+  strokePath(ctx, boom.kind === 'drone' ? COLORS.drone : COLORS.boom, 2);
+  circlePath(ctx, centerX(boom.x), centerY(boom.y), 4 + age * VIEW.cell * 0.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Псевдослучайность без состояния: одна клетка всегда даёт один и тот же мусор. */
+function seeded(n) {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/**
+ * Обломок: что сгорело — то и лежит. Стена отдаёт бетон и арматуру, башня — сорванную
+ * люльку. Разброс детерминирован координатами клетки, поэтому перемотка туда-сюда
+ * рисует одну и ту же картину, а не новый рандом каждый кадр.
+ */
+function drawWreck(ctx, wreck) {
+  const cell = VIEW.cell;
+  const cx = centerX(wreck.x);
+  const cy = centerY(wreck.y);
+  const seed = seeded(wreck.x * 31.7 + wreck.y * 12.9);
+
+  rrPath(ctx, px(wreck.x) + 1, px(wreck.y) + 1, cell - 2, cell - 2, 4);
+  fillPath(ctx, 'rgba(0,0,0,.5)');
+  ctx.fill();
+
+  // Опалённое пятно: сплюснутый круг — взгляд чуть сверху, как у всей поля.
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, 0.72);
+  const grd = ctx.createRadialGradient(0, 0, cell * 0.05, 0, 0, cell * 0.52);
+  grd.addColorStop(0, 'rgba(20,24,30,.95)');
+  grd.addColorStop(1, 'rgba(20,24,30,0)');
+  ctx.fillStyle = grd;
+  circlePath(ctx, 0, 0, cell * 0.52);
+  ctx.fill();
+  ctx.restore();
+
+  if (wreck.kind === 'wall') drawWallRubble(ctx, cx, cy, cell, seed);
+  else drawBrokenMount(ctx, cx, cy, cell, seed);
+}
+
+/** Бетонные глыбы и арматура — то, что остаётся от стены. */
+function drawWallRubble(ctx, cx, cy, cell, seed) {
+  const s = cell * 0.5;
+  for (let i = 0; i < 3; i += 1) {
+    const a = seed * Math.PI + i * 2.1;
+    const d = s * (0.22 + 0.36 * seeded(seed * 100 + i));
+    const w = s * (0.28 + 0.22 * seeded(seed * 50 + i));
+    ctx.save();
+    ctx.translate(cx + Math.cos(a) * d, cy + Math.sin(a) * d);
+    ctx.rotate(a + seeded(i + seed) * 1.5);
+    polyPath(ctx, [[-w, -w * 0.6], [w * 0.8, -w * 0.5], [w, w * 0.55], [-w * 0.6, w * 0.7]]);
+    ctx.fillStyle = i % 2 ? MAT.concrete : MAT.concreteDark;
+    ctx.fill();
+    strokePath(ctx, 'rgba(0,0,0,.5)', 1);
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.strokeStyle = 'rgba(150,160,175,.7)';
+  ctx.lineWidth = Math.max(1, cell * 0.04);
+  for (let i = 0; i < 2; i += 1) {
+    const a = seed * Math.PI * 2 + i * 1.9;
+    ctx.beginPath();
+    ctx.moveTo(cx - Math.cos(a) * s * 0.5, cy - Math.sin(a) * s * 0.5);
+    ctx.quadraticCurveTo(cx + Math.cos(a + 1) * s * 0.25, cy + Math.sin(a + 1) * s * 0.25,
+      cx + Math.cos(a) * s * 0.55, cy + Math.sin(a) * s * 0.55);
+    ctx.stroke();
+  }
+}
+
+/** Сорванная платформа: перевёрнутый шестиугольник, сломанный ствол, оплавленная медь. */
+function drawBrokenMount(ctx, cx, cy, cell, seed) {
+  const r = cell * 0.3;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate((seed - 0.5) * 0.7);
+  polyPath(ctx, hexPoints(r, seed * 2));
+  ctx.fillStyle = MAT.steelDark;
+  ctx.fill();
+  strokePath(ctx, 'rgba(0,0,0,.6)', 1.2);
+  ctx.stroke();
+  ctx.rotate(0.9 + seed);
+  ctx.fillStyle = MAT.steel;
+  rrPath(ctx, 0, -r * 0.16, r * 1.15, r * 0.32, r * 0.1);
+  ctx.fill();
+  strokePath(ctx, MAT.steelDark, 1);
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = alpha(MAT.copper, 0.8);
+  circlePath(ctx, cx + (seed - 0.5) * r, cy + (seed - 0.5) * r, Math.max(1.2, cell * 0.05));
+  ctx.fill();
+}
+
+// ─── Управление проигрывателем ───────────────────────────────────────────────
+
+// ─── Дроны атакующего ────────────────────────────────────────────────────────
+/*
+ * Машина соперника рисуется по тому, что есть в ответе сервера: код и тир из
+ * result.army.squads[].profile, путь — интерполяция маршрута, гибель — кадр robot_lost.
+ * Полоски HP сознательно нет: сервер не отдаёт здоровье отдельной машины, значит рисовать
+ * её нечем, а выдумывать цифры интерфейс не имеет права.
+ */
+
+/**
+ * Три силуэта — по одному на каждую машину каталога (дроны `drone_*` из config/pvp,
+ * ROBOT_OVERRIDES). Узнаваемость важнее реализма: на поле их до двадцати сразу, и
+ * игрок должен за кадр понимать, летит «мясо» или рой «Церберов».
+ */
+
+/** Тягач: широкий фюзеляж, два контейнера по бортам, четыре несущих винта. */
+function drawHaulerDrone(ctx, s, hue, thrust, spin) {
+  polyPath(ctx, [
+    [s * 0.95, 0], [s * 0.45, -s * 0.44], [-s * 0.5, -s * 0.52], [-s * 0.86, -s * 0.3],
+    [-s * 0.86, s * 0.3], [-s * 0.5, s * 0.52], [s * 0.45, s * 0.44]
+  ]);
+  ctx.fillStyle = hullGradient(ctx, s);
+  ctx.fill();
+  strokePath(ctx, MAT.steelDark, 1.2);
+  ctx.stroke();
+  // Грузовые контейнеры — то, зачем эта машина летит: объём, а не броня.
+  for (const side of [-1, 1]) {
+    ctx.fillStyle = alpha(MAT.concrete, 0.95);
+    rrPath(ctx, -s * 0.52, side * s * 0.5 - s * 0.17, s * 0.95, s * 0.34, s * 0.09);
+    ctx.fill();
+    strokePath(ctx, MAT.concreteDark, 1);
+    ctx.stroke();
+    ctx.fillStyle = alpha(MAT.hazard, 0.7);
+    ctx.fillRect(-s * 0.48, side * s * 0.5 - s * 0.03, s * 0.87, s * 0.06);
+  }
+  for (const pod of [[s * 0.42, -s * 0.52], [s * 0.42, s * 0.52], [-s * 0.56, -s * 0.6], [-s * 0.56, s * 0.6]]) {
+    rotor(ctx, pod[0], pod[1], s * 0.3, spin + pod[0], MAT.steelLight);
+  }
+  ctx.fillStyle = alpha(MAT.glass, 0.9);
+  circlePath(ctx, s * 0.62, 0, s * 0.16);
+  ctx.fill();
+  engineGlow(ctx, -s * 0.9, 0, s * 0.34, hue, thrust);
+}
+
+/** Стрелок: тонкая стрела, подрезанные крылья, два сопла. Быстрый и хлипкий. */
+function drawDartDrone(ctx, s, hue, thrust, spin) {
+  polyPath(ctx, [
+    [s * 1.15, 0], [-s * 0.15, -s * 0.34], [-s * 0.75, -s * 0.16],
+    [-s * 0.6, 0], [-s * 0.75, s * 0.16], [-s * 0.15, s * 0.34]
+  ]);
+  ctx.fillStyle = hullGradient(ctx, s);
+  ctx.fill();
+  strokePath(ctx, MAT.steelDark, 1.1);
+  ctx.stroke();
+  ctx.fillStyle = alpha(MAT.steelDark, 0.92);
+  polyPath(ctx, [[-s * 0.1, -s * 0.3], [-s * 0.55, -s * 0.62], [-s * 0.62, -s * 0.34]]);
+  ctx.fill();
+  polyPath(ctx, [[-s * 0.1, s * 0.3], [-s * 0.55, s * 0.62], [-s * 0.62, s * 0.34]]);
+  ctx.fill();
+  ctx.fillStyle = alpha(MAT.glass, 0.92);
+  circlePath(ctx, s * 0.5, 0, s * 0.13);
+  ctx.fill();
+  rotor(ctx, -s * 0.3, -s * 0.44, s * 0.2, spin, MAT.steelLight);
+  rotor(ctx, -s * 0.3, s * 0.44, s * 0.2, -spin, MAT.steelLight);
+  engineGlow(ctx, -s * 0.72, -s * 0.14, s * 0.26, hue, thrust);
+  engineGlow(ctx, -s * 0.72, s * 0.14, s * 0.26, hue, thrust);
+}
+
+/** Цербер: три блока-корпуса, носовые плиты, три двигателя. Тяжёлый рой. */
+function drawCerberusDrone(ctx, s, hue, thrust, spin) {
+  for (const lane of [-1, 0, 1]) {
+    const w = lane === 0 ? s * 0.34 : s * 0.26;
+    ctx.fillStyle = lane === 0 ? hullGradient(ctx, s) : alpha(MAT.steelDark, 0.95);
+    rrPath(ctx, -s * 0.7, lane * s * 0.42 - w / 2, s * 1.6, w, w * 0.4);
+    ctx.fill();
+    strokePath(ctx, 'rgba(0,0,0,.55)', 1);
+    ctx.stroke();
+  }
+  // Носовые плиты держат первый удар обороны — отсюда их ширина на весь рой.
+  polyPath(ctx, [
+    [s * 0.9, -s * 0.62], [s * 1.18, 0], [s * 0.9, s * 0.62], [s * 0.62, s * 0.5], [s * 0.62, -s * 0.5]
+  ]);
+  ctx.fillStyle = alpha(MAT.concrete, 0.9);
+  ctx.fill();
+  strokePath(ctx, MAT.concreteDark, 1.2);
+  ctx.stroke();
+  ctx.fillStyle = alpha(MAT.hazard, 0.8);
+  ctx.fillRect(s * 0.66, -s * 0.06, s * 0.2, s * 0.12);
+  ctx.fillStyle = alpha(MAT.glass, 0.9);
+  circlePath(ctx, s * 0.98, 0, s * 0.12);
+  ctx.fill();
+  for (const lane of [-1, 0, 1]) rotor(ctx, -s * 0.45, lane * s * 0.55, s * 0.26, spin + lane, MAT.steelLight);
+  for (const lane of [-1, 0, 1]) engineGlow(ctx, -s * 0.78, lane * s * 0.4, s * 0.28, hue, thrust);
+}
+
+/** Курс: по вектору последнего шага; в простое и после перемотки — на штаб. */
+function droneHeading(drone, replay) {
+  const dx = drone.fx - drone.px;
+  const dy = drone.fy - drone.py;
+  if (Math.abs(dx) + Math.abs(dy) > 1e-5) return Math.atan2(dy, dx);
+  return Math.atan2(replay.hq.y - drone.fy, replay.hq.x - drone.fx);
+}
+
+/** Металл корпуса: свет сверху, тень снизу — тот же приём, что у платформ башен. */
+function hullGradient(ctx, s) {
+  const grd = ctx.createLinearGradient(0, -s, 0, s);
+  grd.addColorStop(0, MAT.steelLight);
+  grd.addColorStop(0.45, MAT.steel);
+  grd.addColorStop(1, MAT.steelDark);
+  return grd;
+}
+
+/** Несущий винт: полупрозрачный диск и лопасть. На ходу крутится, на паузе замер. */
+function rotor(ctx, x, y, r, phase, tint) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = alpha(tint, 0.14);
+  circlePath(ctx, 0, 0, r);
+  ctx.fill();
+  ctx.rotate(phase);
+  ctx.strokeStyle = alpha(tint, 0.5);
+  ctx.lineWidth = Math.max(0.7, r * 0.16);
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.92, 0);
+  ctx.lineTo(r * 0.92, 0);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Сопло: конус факела назад по оси -x и тёплое пятно на срезе. */
+function engineGlow(ctx, x, y, r, color, strength) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  polyPath(ctx, [[x, y - r * 0.42], [x - r * 2.2 * strength, y], [x, y + r * 0.42]]);
+  ctx.fillStyle = alpha(color, 0.26 * strength);
+  ctx.fill();
+  muzzleGlow(ctx, x, y, r, color, strength);
+  ctx.restore();
+}
+
+function drawDrone(ctx, drone, replay) {
+  const cell = VIEW.cell;
+  const art = droneArtOf(drone.code, drone.tier);
+  const s = cell * 0.42 * art.scale;
+  const cx = centerX(drone.fx);
+  const cy = centerY(drone.fy);
+  const live = replay.playing && VIEW.anim;
+  // Двигатель пульсирует, пока машина идёт; на паузе горит ровно — по свету видно, что
+  // остановился реплей, а не дрон сгорел.
+  const thrust = live ? 0.6 + 0.4 * Math.sin(animTime() * 16 + drone.id * 1.7) : 0.72;
+  const spin = live ? animTime() * 26 + drone.id : 0.6;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  // Тень падает на грунт и не участвует в покачивании: иначе корпус «плыл» бы по полю.
+  ctx.save();
+  ctx.translate(cell * 0.03, cell * 0.07);
+  ctx.scale(1, 0.55);
+  ctx.fillStyle = 'rgba(0,0,0,.42)';
+  circlePath(ctx, 0, 0, s * 0.95);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.rotate(droneHeading(drone, replay));
+  if (live) ctx.translate(0, Math.sin(animTime() * 11 + drone.id) * cell * 0.02);
+
+  if (isFlat()) {
+    ctx.fillStyle = art.hue;
+    circlePath(ctx, 0, 0, s * 0.6);
+    ctx.fill();
+    strokePath(ctx, 'rgba(0,0,0,.6)', 1);
+    ctx.stroke();
+  } else if (art.shape === 'dart') {
+    drawDartDrone(ctx, s, art.hue, thrust, spin);
+  } else if (art.shape === 'cerberus') {
+    drawCerberusDrone(ctx, s, art.hue, thrust, spin);
+  } else {
+    drawHaulerDrone(ctx, s, art.hue, thrust, spin);
+  }
+  ctx.restore();
+
+  if (drone.range > 0 && VIEW.ranges) {
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    strokePath(ctx, alpha(art.hue, 0.4), 1);
+    circlePath(ctx, cx, cy, drone.range * cell);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/**
+ * След двигателя: одна вспышка на пройденную долю клетки. Без нормирования по
+ * расстоянию на скорости 8× получилась бы сплошная лента, а не отдельные тычки сопел:
+ * реплей обязан выглядеть одинаково на любом ускорении.
+ */
+function emitDroneTrails(replay) {
+  for (const drone of replay.drones) {
+    if (!drone.alive) continue;
+    drone.walked = (drone.walked || 0) + Math.hypot(drone.fx - drone.px, drone.fy - drone.py);
+    if (drone.walked < 0.16) continue;
+    drone.walked = 0;
+    const art = droneArtOf(drone.code, drone.tier);
+    const ang = droneHeading(drone, replay);
+    spawnTrail(drone.fx - Math.cos(ang) * 0.5 * art.scale, drone.fy - Math.sin(ang) * 0.5 * art.scale, ang, art.hue);
+  }
+}
+
+let controlsBound = false;
+const RATES = [1, 2, 4, 8];
+
+const EVENT_TEXT = {
+  spawn: 'вылет',
+  robot_lost: 'дрон сбит',
+  wall_down: 'стена пала',
+  unit_down: 'башня уничтожена',
+  hq_down: 'штаб разрушен',
+  overheat: 'перегрев ствола',
+  cooled: 'остыла, в строю',
+  end: 'конец боя'
+};
+
+function bindReplayControls() {
+  const scrub = $('rpScrub');
+  scrub.max = String(Math.round(S.replay.duration));
+  scrub.value = '0';
+  scrub.disabled = false;
+  for (const id of ['rpPlay', 'rpBack', 'rpRate']) $(id).disabled = false;
+  if (controlsBound) return;
+  controlsBound = true;
+
+  $('rpPlay').addEventListener('click', () => {
+    const replay = S.replay;
+    if (!replay) return;
+    if (!replay.playing && replay.t >= replay.duration) seekReplay(0);
+    replay.playing = !replay.playing;
+    $('rpPlay').innerHTML = replay.playing ? '&#10074;&#10074; Пауза' : '&#9654; Играть';
+  });
+  $('rpBack').addEventListener('click', () => {
+    if (!S.replay) return;
+    S.replay.playing = false;
+    $('rpPlay').innerHTML = '&#9654; Играть';
+    seekReplay(0);
+    draw();
+    renderReplayInfo();
+  });
+  $('rpRate').addEventListener('click', () => {
+    if (!S.replay) return;
+    S.replay.rate = RATES[(RATES.indexOf(S.replay.rate) + 1) % RATES.length];
+    $('rpRate').textContent = S.replay.rate + '×';
+  });
+  scrub.addEventListener('input', () => {
+    if (!S.replay) return;
+    S.replay.playing = false;
+    $('rpPlay').innerHTML = '&#9654; Играть';
+    seekReplay(Number(scrub.value));
+    draw();
+    renderReplayInfo();
+  });
+}
+
+function exitReplay() {
+  S.replay = null;
+  for (const id of ['rpPlay', 'rpBack', 'rpRate', 'rpScrub']) $(id).disabled = true;
+  $('rpPlay').innerHTML = '&#9654; Играть';
+  $('rpClock').textContent = '—';
+  $('rpEvents').textContent = 'Реплей закрыт — поле снова в режиме редактора.';
+  draw();
+  renderAnalysis();
+}
+
+function renderReplayInfo() {
+  const replay = S.replay;
+  if (!replay) return;
+  const live = replay.drones.filter((drone) => drone.alive).length;
+  const battle = replay.battle;
+
+  $('rpClock').textContent =
+    (replay.t / 1000).toFixed(1) + 'с / ' + (replay.duration / 1000).toFixed(1) + 'с · тик ' +
+    Math.round(replay.t / replay.tickMs) + '/' + battle.ticks + ' · дронов живо ' + live + '/' + battle.robots.deployed;
+
+  const lines = replay.timeline
+    .filter((event) => event.atMs <= replay.t)
+    .slice(-10)
+    .map((event) => {
+      const where = event.cell ? event.cell.x + ',' + event.cell.y : '';
+      const name = event.itemId && replay.profiles.get(event.itemId) ? replay.profiles.get(event.itemId).name : '';
+      return '<span class="muted">' + (event.atMs / 1000).toFixed(1) + 'с</span> ' +
+        esc(EVENT_TEXT[event.type] || event.type) + (name ? ' · ' + esc(name) : '') + (where ? ' · ' + where : '');
+    });
+
+  const honest = [
+    'Исход: <b>' + esc(battle.outcome) + '</b> · ' + esc(battle.endedBy) +
+    ' · урон штабу ' + fmtNum(battle.hq.damage) + '/' + battle.hq.maxHp +
+    ' · оборона: ' + battle.defense.towersDown + '/' + battle.defense.towers + ' башен, ' +
+    battle.defense.wallsDown + '/' + battle.defense.walls + ' стен',
+    replay.route ? 'Трасса дронов — худший подход из серверного отчёта базы.'
+      : 'Маршрута в отчёте соперника нет — дроны идут напрямую к штабу.',
+    'Сервер не отдаёт HP отдельных машин и клетки обороны, пережившей бой: их на поле нет.',
+    'Сеть и топливо: ' + (battle.power ? battle.power.unpowered : 0) + ' башен встретили бой обесточенными, ' +
+      (battle.power ? battle.power.overheatEvents : 0) + ' перегрев(ов); дейтерий — атака ' +
+      fmtNum((battle.fuel || {}).attackerDeuterium || 0) + ', оборона ' +
+      fmtNum((battle.fuel || {}).defenderDeuterium || 0),
+    replay.truncated ? '<span class="warn">Кадров не хватает: сервер обрезал таймлайн по потолку.</span>' : ''
+  ].filter(Boolean).join('<br>');
+
+  $('rpEvents').innerHTML = lines.join('<br>') + '<br>' + honest +
+    '<br><a href="#" class="link" onclick="TD.exitReplay();return false">вернуться к редактору</a>';
+}
+
+// ─── Действия панелей ────────────────────────────────────────────────────────
+
+function selectTool(name) {
+  S.tool = name;
+  for (const button of document.querySelectorAll('#toolbar button[data-tool]')) {
+    button.classList.toggle('on', button.dataset.tool === name);
+  }
+  $('pickHint').textContent = TOOL_HINT[name];
+}
+
+/**
+ * Слои вида. Нужны по двум причинам: сравнивать векторную графику с плоской схемой
+ * (диагностика «не вижу, где стоит башня») и выключать движение, когда оно мешает
+ * разобрать конкретный кадр боя. Настройка переживает перезагрузку страницы.
+ */
+const VIEW_KEY = 'td.play.view';
+
+function applyView() {
+  $('viewStyle').textContent = VIEW.style === 'art' ? 'Арт' : 'Схема';
+  $('viewStyle').classList.toggle('on', VIEW.style === 'art');
+  $('viewGrid').classList.toggle('on', VIEW.grid);
+  $('viewRanges').classList.toggle('on', VIEW.ranges);
+  $('viewAnim').classList.toggle('on', VIEW.anim);
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ style: VIEW.style, grid: VIEW.grid, ranges: VIEW.ranges, anim: VIEW.anim }));
+  } catch (error) {
+    /* Приватный режим браузера: слои работают, но не запоминаются. */
+  }
+  draw();
+}
+
+function bindViewToggles() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null');
+    if (saved && typeof saved === 'object') {
+      VIEW.style = saved.style === 'schema' ? 'schema' : 'art';
+      VIEW.grid = saved.grid !== false;
+      VIEW.ranges = saved.ranges === true;
+      VIEW.anim = saved.anim !== false;
+    }
+  } catch (error) {
+    /* Повреждённая настройка — рисуем так, как умеет полигон. */
+  }
+  $('viewStyle').addEventListener('click', () => {
+    VIEW.style = VIEW.style === 'art' ? 'schema' : 'art';
+    applyView();
+  });
+  $('viewGrid').addEventListener('click', () => { VIEW.grid = !VIEW.grid; applyView(); });
+  $('viewRanges').addEventListener('click', () => { VIEW.ranges = !VIEW.ranges; applyView(); });
+  $('viewAnim').addEventListener('click', () => {
+    VIEW.anim = !VIEW.anim;
+    // Выключенная анимация обязана очистить пул: иначе последний дым остался бы висеть
+    // над полем навсегда — updateFx больше не вызывается.
+    if (!VIEW.anim) clearFx();
+    applyView();
+  });
+  applyView();
+}
+
+async function act(label, fn) {
+  try {
+    await fn();
+  } catch (error) {
+    log(label + ': ' + error.message, 'err');
+  }
+}
+
+const TD = {
+  save: saveLayout,
+  revert: revertLayout,
+  clear: clearLayout,
+  find: findOpponent,
+  raid,
+  armyAll: setArmyAll,
+  exitReplay,
+
+  pick(itemId) {
+    S.picked = itemId;
+    selectTool('tower');
+    const item = itemOf(itemId);
+    log('выбрана ' + (item ? item.name : itemId) + ' — кликните по свободной клетке');
+    renderInventory();
+    draw();
+  },
+
+  build() {
+    const code = $('bpSelect') && $('bpSelect').value;
+    return act('стройка', async function () {
+      const result = await api('POST', '/v1/workshop/build', { code });
+      log('начато: ' + result.result.blueprint.name + ' · ' + fmtMs(result.result.job.endsAt - Date.now()), 'ok');
+    });
+  },
+
+  speedup(jobId) {
+    return act('ускорение', async function () {
+      const result = await api('POST', '/v1/workshop/build/' + encodeURIComponent(jobId) + '/speedup', {});
+      log('ускорено на ' + fmtMs(result.result.savedMs) + ' · ' + result.result.cost + ' хроний', 'ok');
+    });
+  },
+
+  speedupAll() {
+    return act('ускорить всё', async function () {
+      const result = await api('POST', '/v1/workshop/build/speedup-all', {});
+      log('очередь ускорена: ' + result.result.count + ' работ(ы) · ' + result.result.cost + ' хроний', 'ok');
+    });
+  },
+
+  dismantle(itemId) {
+    return act('разбор', async function () {
+      const result = await api('POST', '/v1/workshop/item/' + encodeURIComponent(itemId) + '/dismantle', { mode: 'salvage' });
+      log('разобрано: ' + JSON.stringify(result.result.salvage) + ' · хлам ' + JSON.stringify(result.result.junk), 'ok');
+    });
+  },
+
+  collect() {
+    return act('сбор склада', async function () {
+      const result = await api('POST', '/v1/economy/collect', {});
+      const collected = (result.result && result.result.collected) || result.result || {};
+      log('собрано: ' + JSON.stringify(collected), 'ok');
+    });
+  },
+
+  assist() {
+    return act('помощь друга', async function () {
+      const result = await api('POST', '/v1/energy/assist', {});
+      log('энергия: +' + JSON.stringify((result.result || {}).gain || result.result || {}), 'ok');
+    });
+  },
+
+  /**
+   * Сооружение (реактор, кулер, цех, ASIC, цистерна) — не предмет инвентаря, а
+   * счётчик на базе, поэтому маршрут тот же `/v1/workshop/build`: сервер сам
+   * различает контракты по коду и возвращает `structure` вместо `blueprint`.
+   * Фронт не угадывает природу постройки — он читает `result.structure`.
+   */
+  buildStructure(code) {
+    return act('стройка ' + code, async function () {
+      const result = await api('POST', '/v1/workshop/build', { code });
+      const job = result.result.job;
+      const left = job && job.endsAt ? new Date(job.endsAt).getTime() - Date.now() : 0;
+      log('в очередь: ' + code + (result.result.structure ? ' (сооружение)' : '') +
+        ' · ' + fmtMs(left) + ' · роботов занято ' + result.result.busy, 'ok');
+    });
+  },
+
+  charge() {
+    const units = Number(($('staniumUnits') || {}).value || 1);
+    return act('зарядка поля', async function () {
+      const result = await api('POST', '/v1/materials/stanium/charge', { units });
+      log('станиум: −' + result.result.spent + ' · поле до ' +
+        (result.result.field.until ? new Date(result.result.field.until).toLocaleTimeString('ru-RU', { hour12: false }) : '—') +
+        (result.result.duplicate ? ' (дубль запроса отброшен)' : ''), 'ok');
+    });
+  }
+};
+
+window.TD = TD;
+
+// ─── Сборка страницы ─────────────────────────────────────────────────────────
+
+function renderAll() {
+  renderWallet();
+  if (!S.snap || !S.cfg) return;
+  renderBasePanel();
+  renderInventory();
+  renderShop();
+  renderEconomy();
+  renderPower();
+  renderDefense();
+  renderPvp();
+  renderAnalysis();
+  if (!S.replay) draw();
+}
+
+let lastFrame = 0;
+let ambientAt = 0;
+
+/**
+ * Главный цикл. Обязан рисовать кадр только когда на поле что-то происходит: идёт бой,
+ * живут частицы или включена фоновая анимация (дыхание реактора, мигание штаба). В простом
+ * редакторе без анимации холст спит до следующего клика или ответа сервера — жечь CPU
+ * ради 60 кадров пустого полигона незачем.
+ */
+function frame(now) {
+  const delta = lastFrame ? Math.min(120, now - lastFrame) : 16;
+  lastFrame = now;
+  const replay = S.replay;
+  const playing = Boolean(replay && replay.playing);
+
+  if (playing) {
+    advanceReplay(delta * replay.rate);
+    if (replay.t >= replay.duration) {
+      replay.playing = false;
+      $('rpPlay').innerHTML = '&#9654; Играть';
+    }
+  }
+  if (VIEW.anim) {
+    updateFx(delta / 1000);
+    if (playing) emitDroneTrails(replay);
+  }
+
+  ambientAt += delta;
+  if (playing || FX.parts.length > 0 || (VIEW.anim && ambientAt >= 40)) {
+    ambientAt = 0;
+    draw();
+    if (playing) renderReplayInfo();
+  }
+  requestAnimationFrame(frame);
+}
+
+async function boot() {
+  bindBoard();
+  bindViewToggles();
+  $('btnLogin').addEventListener('click', login);
+  $('btnRefresh').addEventListener('click', refresh);
+  $('socialId').value = localStorage.getItem(SID_KEY) || '1';
+
+  try {
+    S.cfg = await api('GET', '/v1/config');
+    setupCanvas();
+  } catch (error) {
+    log('правила поля не загружены: ' + error.message, 'err');
+    return;
+  }
+
+  S.token = localStorage.getItem(TOKEN_KEY);
+  if (S.token) {
+    await refresh();
+    if (!S.snap) {
+      localStorage.removeItem(TOKEN_KEY);
+      S.token = null;
+      log('токен не принят — войдите заново', 'warn');
+    }
+  } else {
+    log('введите socialId и нажмите «Войти» (стенд: DEV_SIGNER_ENABLED)');
+  }
+
+  // Склады и реген живут временем, а не кликами: раз в 20 секунд подтягиваем снимок,
+  // но только когда игрок ничего не правит в черновике и не смотрит реплей.
+  setInterval(() => {
+    if (S.token && !S.dirty && !(S.replay && S.replay.playing)) refresh();
+  }, 20000);
+
+  requestAnimationFrame(frame);
+}
+
+boot();
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+

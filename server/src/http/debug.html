@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TDS · отладочный стенд</title>
+<style>
+  :root {
+    --bg: #0d1015; --panel: #151a22; --panel2: #1b2129; --line: #262e39;
+    --text: #d7dee8; --muted: #8494a8; --accent: #4ea1ff; --ok: #4ec27a;
+    --warn: #e6b24a; --err: #e2685f; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--mono); }
+  header {
+    position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px;
+    align-items: center; padding: 10px 14px; background: var(--panel2); border-bottom: 1px solid var(--line);
+  }
+  .brand { font-weight: 700; letter-spacing: .5px; }
+  .brand span { color: var(--accent); font-weight: 400; }
+  header .spacer { flex: 1; }
+  input, select, button { font: inherit; color: inherit; }
+  input, select { background: #0f141b; border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+  input[type=number] { width: 84px; }
+  button { background: #22303f; border: 1px solid #33465c; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  button:hover { background: #2c3f53; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.warn { background: #3a2f1d; border-color: #6b5426; }
+  button.err { background: #3a2220; border-color: #6b2f2a; }
+  button.ok { background: #1e3527; border-color: #2f6b45; }
+  .wallet { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; white-space: nowrap; }
+  .chip b { color: var(--accent); }
+  .chip.neg b { color: var(--err); }
+  .chip.hot b { color: var(--warn); }
+  .chip small { color: var(--muted); }
+  main { padding: 12px 14px 40px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+  .panel > h2 {
+    margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel > h2 .tag { color: var(--accent); text-transform: none; letter-spacing: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num, th.num { text-align: right; }
+  .list { max-height: 260px; overflow: auto; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  .console { margin-top: 12px; }
+  #log {
+    background: #080b0f; border: 1px solid var(--line); border-radius: 6px; margin: 6px 0 0;
+    padding: 8px; height: 300px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  }
+  .hint { color: var(--muted); font-size: 11px; margin: 4px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand" title="Tower Defense Syndicate">TDS <span>отладочный стенд</span></div>
+  <input id="socialId" placeholder="socialId" value="1" size="10">
+  <button id="btnLogin">Войти</button>
+  <button id="btnRefresh" class="ok">Обновить</button>
+  <button id="btnLogout" class="err">Сброс сессии</button>
+  <a href="/play" style="color:var(--accent)">полигон ↗</a>
+  <div class="spacer"></div>
+  <span id="who" class="muted">не авторизован</span>
+</header>
+
+<div class="wallet" id="wallet"><span class="chip muted">войдите, чтобы увидеть баланс</span></div>
+
+<main>
+<div class="grid">
+
+  <section class="panel">
+    <h2>Экономика <span class="tag" id="tagEnergy"></span></h2>
+    <div class="row">
+      <button onclick="act.collect()">Собрать склад</button>
+      <button onclick="act.assist()">Помощь друга</button>
+    </div>
+    <div id="warehouses"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Энергосеть <span class="tag" id="tagPower"></span></h2>
+    <div id="powerBalance"></div>
+    <div id="powerRows" style="margin-top:6px"></div>
+    <div id="structures" style="margin-top:6px"></div>
+    <p class="hint">Мощность — состояние, а не запас: сервер пересчитывает её замкнутой
+      формулой на каждом запросе, поэтому таблица обязана быть снимком, а не накоплением.
+      Веер бинарный — у каждой группы виден онлайн и причина отказа.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Мастерская <span class="tag" id="tagBuilders"></span></h2>
+    <div class="row">
+      <select id="bpSelect" style="max-width:230px"></select>
+      <button onclick="act.build()">Начать стройку</button>
+    </div>
+    <div id="queue"></div>
+    <div class="row" style="margin-top:6px">
+      <button onclick="act.speedupAll()" class="warn">Ускорить всё</button>
+      <span id="speedupAllQuote" class="muted"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Инвентарь <span class="tag" id="tagInv"></span></h2>
+    <div id="inventory" class="list"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Цех переработки</h2>
+    <div class="row">
+      <select id="junkSelect" style="max-width:190px"></select>
+      <input type="number" id="junkAmount" value="100" min="1">
+      <button onclick="act.recycle()">Сдать</button>
+    </div>
+    <div id="junkTable"></div>
+    <p class="hint">Хлам → металлы + сырьё. Батарейки дают ещё и энергию.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Молекулярный станок <span class="tag">астерий → металл</span></h2>
+    <div class="row">
+      <select id="metalSelect"></select>
+      <input type="number" id="convertAmount" value="10" min="1">
+      <button onclick="act.quote()">Курс</button>
+      <button onclick="act.convert()" class="ok">Перегнать</button>
+    </div>
+    <div id="quoteBox" class="muted">Нажмите «Курс», чтобы увидеть выход.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Станиумный модуль <span class="tag">оборона базы</span></h2>
+    <div class="row">
+      <input type="number" id="staniumUnits" value="4" min="1">
+      <button onclick="act.chargeStanium()" class="ok">Зарядить</button>
+    </div>
+    <div id="staniumField"></div>
+    <p class="hint">1 станиум = 15 минут поля. Поле замедляет атакующих; срок проверяется по моменту боя.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Магазин <span class="tag">паки за рубли</span></h2>
+    <div id="catalog" class="list"></div>
+    <div class="row" style="margin-top:6px">
+      <button onclick="act.buyBuilder()">Купить робота (за астерий)</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Заказы <span class="tag">эмуляция постбэка ВК</span></h2>
+    <div id="orders" class="list"></div>
+    <p class="hint">Товар выдаёт только подтверждение площадки — кнопки заменяют подписанное событие VK в стенде.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Rewarded-реклама</h2>
+    <div class="row">
+      <select id="adSelect" style="max-width:250px"></select>
+      <button onclick="act.adOpen()">Смотреть</button>
+    </div>
+    <div id="adSession" class="muted">сессии нет</div>
+    <div class="row" style="margin-top:6px">
+      <button onclick="act.adClaim()" class="ok">Подтвердить показ (dev)</button>
+      <button onclick="act.adAbandon()" class="err">Отменить</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>PvP <span class="tag" id="tagPvp"></span></h2>
+    <div class="row">
+      <button onclick="act.opponent()">Найти соперника</button>
+      <button onclick="act.raid()" class="warn">В атаку</button>
+    </div>
+    <div id="opponent" class="muted">соперник не выбран</div>
+    <div id="army" class="list" style="margin-top:6px"></div>
+    <div id="battle"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Оборона базы</h2>
+    <div class="row">
+      <button onclick="act.base()">Отчёт по базе</button>
+      <button onclick="act.clearBase()" class="err">Снять всё</button>
+    </div>
+    <div id="baseReport"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Отладка <span class="tag">DEV_SIGNER_ENABLED</span></h2>
+    <div class="row">
+      <label>астерий купл. <input type="number" id="gPurchased" value="1000"></label>
+      <label>заработ. <input type="number" id="gEarned" value="500"></label>
+    </div>
+    <div class="row">
+      <label>хрониум <input type="number" id="gChronium" value="100"></label>
+      <label>вольфрам <input type="number" id="gWolfram" value="50"></label>
+      <label>станиум <input type="number" id="gStanium" value="20"></label>
+    </div>
+    <div class="row">
+      <label>чёрный <input type="number" id="gBlack" value="5000"></label>
+      <label>цветной <input type="number" id="gColored" value="2000"></label>
+      <label>драг. <input type="number" id="gPrecious" value="500"></label>
+      <label>хлам <input type="number" id="gJunk" value="500"></label>
+    </div>
+    <div class="row">
+      <!-- SEC накапает тиком по 25/ч на стойку: без печати витрину монеты и её будущую
+           трату нельзя посмотреть, не наиграв сутки. -->
+      <label>SEC <input type="number" id="gSec" value="1000"></label>
+    </div>
+    <div class="row"><button onclick="act.grant()" class="ok">Выдать</button></div>
+    <div class="row" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
+      <label>соперников <input type="number" id="seedCount" value="5"></label>
+      <label>станиум у них <input type="number" id="seedStanium" value="0"></label>
+      <button onclick="act.seed()">Засеять</button>
+    </div>
+    <p class="hint">Без соперников матчмейкингу некого находить: свой аккаунт в подбор не попадает.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Журнал движений <span class="tag" id="tagLedger"></span></h2>
+    <div class="row">
+      <select id="ledgerReason"><option value="">все причины</option></select>
+      <button onclick="act.ledger()">Обновить</button>
+    </div>
+    <div id="ledger" class="list"></div>
+  </section>
+
+</div>
+
+<div class="console">
+  <div class="row">
+    <b>Лог запросов</b>
+    <button onclick="act.clearLog()">Очистить</button>
+    <span class="muted">серверные логи смотрю я — напишите, что не так, и я разберусь</span>
+  </div>
+  <pre id="log"></pre>
+</div>
+</main>
+<script>
+'use strict';
+
+var TOKEN_KEY = 'td.token';
+var SID_KEY = 'td.socialId';
+
+var token = localStorage.getItem(TOKEN_KEY) || '';
+var state = null;      // последний payload с витриной (economy + user)
+var cfg = null;        // GET /v1/config (правила, каталог, рекламные offer'ы)
+var shop = null;       // GET /v1/workshop/blueprints
+var mats = null;       // GET /v1/materials (курсы станка, правила станиума)
+var orders = [];
+var opponent = null;
+var ledger = null;
+var adSessionId = null;
+
+function $(id) { return document.getElementById(id); }
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>]/g, function (c) {
+    return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;';
+  });
+}
+function fmt(n) {
+  if (typeof n !== 'number') return String(n);
+  return Math.abs(n % 1) > 0.001 ? n.toFixed(2) : String(Math.round(n));
+}
+function dur(ms) {
+  if (ms === null || ms === undefined) return '—';
+  var s = Math.max(0, Math.round(ms / 1000));
+  var h = Math.floor(s / 3600);
+  var m = Math.floor((s % 3600) / 60);
+  if (h > 0) return h + 'ч ' + m + 'м';
+  if (m > 0) return m + 'м ' + (s % 60) + 'с';
+  return s + 'с';
+}
+function leftAt(iso) { return iso ? dur(new Date(iso).getTime() - Date.now()) : '—'; }
+
+function logLine(text, data) {
+  var el = $('log');
+  var stamp = new Date().toLocaleTimeString('ru-RU');
+  var body = '';
+  if (data !== undefined) {
+    body = ' ' + JSON.stringify(data);
+    if (body.length > 800) body = body.slice(0, 800) + ' …';
+  }
+  el.textContent += '[' + stamp + '] ' + text + body + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+async function api(method, path, body, opts) {
+  opts = opts || {};
+  var headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  if (opts.idem) headers['Idempotency-Key'] = opts.idem;
+
+  var res = await fetch(path, {
+    method: method,
+    headers: headers,
+    body: body === undefined || body === null ? undefined : JSON.stringify(body)
+  });
+  var json = {};
+  try { json = await res.json(); } catch (e) { json = {}; }
+
+  if (json && json.economy) state = json;
+  var detail = json && json.error ? json.error : (json && json.result !== undefined ? json.result : json);
+  logLine((res.ok ? '✓ ' : '✗ ') + method + ' ' + path + ' → ' + res.status, detail);
+
+  if (!res.ok) {
+    var code = (json && json.error && json.error.code) || 'UNKNOWN';
+    var message = (json && json.error && json.error.message) || ('HTTP ' + res.status);
+    logLine('   ! ' + code + ': ' + message, json && json.error && json.error.details);
+    throw new Error(code + ': ' + message);
+  }
+  render();
+  return json || {};
+}
+
+function run(fn) {
+  Promise.resolve()
+    .then(fn)
+    .catch(function (e) { logLine('   ✗ ' + (e && e.message ? e.message : String(e))); });
+}
+
+// ─── Бутстрап ────────────────────────────────────────────────────────────────────
+async function login() {
+  var sid = ($('socialId').value || '1').trim();
+  localStorage.setItem(SID_KEY, sid);
+  var r = await api('POST', '/v1/auth/dev-login', { socialId: sid });
+  token = r.token;
+  localStorage.setItem(TOKEN_KEY, token);
+  logLine('   сессия: ' + (r.user ? r.user.id : '?') + (r.created ? ' (новый игрок)' : ' (существующий)'));
+  await refresh();
+}
+
+async function refresh() {
+  await api('GET', '/v1/economy');
+  await ensureStatic();
+  await loadOrders();
+}
+
+async function ensureStatic() {
+  if (!cfg) {
+    try { cfg = await (await fetch('/v1/config')).json(); } catch (e) { logLine('   ! /v1/config недоступен'); }
+  }
+  if (!shop && token) shop = await api('GET', '/v1/workshop/blueprints');
+  if (!mats && token) mats = await api('GET', '/v1/materials');
+  fillSelects();
+}
+
+async function loadOrders() {
+  var r = await api('GET', '/v1/shop/orders');
+  orders = (r.result && r.result.orders) || [];
+  render();
+}
+
+function fillSelects() {
+  if (shop) {
+    fill('bpSelect', shop.blueprints.map(function (b) {
+      return { v: b.code, t: b.code + ' · ' + b.name + ' (' + b.kind + ')' };
+    }));
+    fill('junkSelect', shop.junk.map(function (j) { return { v: j.id, t: j.id }; }));
+  }
+  if (mats) {
+    fill('metalSelect', mats.rules.metals.map(function (m) {
+      return { v: m.id, t: m.id + ' (×' + m.yieldPerAsterium + ' за 1 астерия)' };
+    }));
+  }
+  if (cfg) fill('adSelect', (cfg.adOffers || []).map(function (o) { return { v: o.sku, t: o.label }; }));
+
+  var sel = $('ledgerReason');
+  if (sel && sel.options.length <= 1) {
+    ['mine', 'industry', 'collect', 'craft', 'upgrade', 'dismantle', 'recycle', 'convert', 'stanium_field', 'deploy',
+      'ad_reward', 'purchase', 'refund', 'raid_loot', 'raid_loss', 'assist', 'builder_purchase', 'admin']
+      .forEach(function (r) {
+        var opt = document.createElement('option');
+        opt.value = r;
+        opt.textContent = r;
+        sel.appendChild(opt);
+      });
+  }
+}
+
+function fill(id, items) {
+  var el = $(id);
+  if (!el) return;
+  var keep = el.value;
+  el.innerHTML = '';
+  items.forEach(function (item) {
+    var opt = document.createElement('option');
+    opt.value = item.v;
+    opt.textContent = item.t;
+    el.appendChild(opt);
+  });
+  if (keep) el.value = keep;
+}
+
+window.addEventListener('DOMContentLoaded', function () {
+  $('socialId').value = localStorage.getItem(SID_KEY) || '1';
+  $('btnLogin').addEventListener('click', function () { run(login); });
+  $('btnRefresh').addEventListener('click', function () { run(refresh); });
+  $('btnLogout').addEventListener('click', function () {
+    token = '';
+    localStorage.removeItem(TOKEN_KEY);
+    state = null;
+    orders = [];
+    opponent = null;
+    render();
+    logLine('   сессия сброшена (данные сервера останутся, пока процесс жив)');
+  });
+  run(async function () { if (token) await refresh(); else render(); });
+  setInterval(function () { if (token) render(); }, 1000);
+});
+
+// ─── Рендер ──────────────────────────────────────────────────────────────────────
+var RU = {
+  energy: 'энергия', ferrum: 'железо', silicium: 'кремний', uranium: 'уран', plasma: 'плазма',
+  deuterium: 'дейтерий', nitrogen: 'азот', sec: 'SEC',
+  black_metal: 'чёрный', colored_metal: 'цветной', precious_metal: 'драгоценный',
+  chronium: 'хрониум', wolfram: 'вольфрам', stanium: 'станиум', asterium: 'астерий'
+};
+
+function chip(label, value, cls) {
+  return '<span class="chip ' + (cls || '') + '"><small>' + label + '</small> <b>' + value + '</b></span>';
+}
+function table(headers, rows) {
+  var head = '<tr>' + headers.map(function (h) {
+    return '<th' + (h.num ? ' class="num"' : '') + '>' + h.t + '</th>';
+  }).join('') + '</tr>';
+  return '<table>' + head + rows.join('') + '</table>';
+}
+function td(value, cls) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + value + '</td>'; }
+
+function render() {
+  renderWallet();
+  if (!state || !state.economy) return;
+  var e = state.economy;
+  $('who').textContent = state.user
+    ? ('id ' + state.user.id.slice(0, 8) + ' · rev ' + state.user.revision + ' · ' + state.user.platform)
+    : '';
+  renderEconomy(e);
+  renderPower(e);
+  renderWorkshop(e);
+  renderInventory(e);
+  renderRecycle(e);
+  renderMaterials(e);
+  renderShop();
+  renderOrders();
+  renderAds(e);
+  renderPvp(e);
+  renderBase(e);
+  renderLedger();
+}
+
+function renderWallet() {
+  var box = $('wallet');
+  if (!state || !state.economy) {
+    box.innerHTML = chip('статус', token ? 'загрузка…' : 'не авторизован');
+    return;
+  }
+  var e = state.economy;
+  var a = e.asterium;
+  var m = e.materials;
+  var out = [chip('⚡', e.resources.energy + '/' + e.energy.cap, e.resources.energy === 0 ? 'neg' : '')];
+
+  ['ferrum', 'silicium', 'uranium', 'plasma'].forEach(function (r) {
+    out.push(chip(RU[r], fmt(e.resources[r])));
+  });
+  // SEC — дробный в кошельке (ставка 25/ч × часы), а тратится целым: витрина обязана
+  // показывать `secSpendable`, иначе игрок увидит «123.45» и попытается потратить 124.
+  out.push(chip('SEC', fmt(e.resources.secSpendable) + ' (+' + fmt(e.power.secPerHour) + '/ч)',
+    e.power.secPerHour > 0 ? 'hot' : ''));
+  out.push(chip('астерий', fmt(a.total) + (a.blocked ? ' ⛔долг' : ''), a.purchased < 0 ? 'neg' : ''));
+  out.push(chip('купл./зараб.', fmt(a.purchased) + ' / ' + fmt(a.earned), a.purchased < 0 ? 'neg' : ''));
+  ['chronium', 'wolfram', 'stanium'].forEach(function (t) {
+    out.push(chip(RU[t], fmt(m[t]), m[t] < 0 ? 'neg' : ''));
+  });
+  out.push(chip('поле станиума', m.staniumField.active ? ('активно ' + leftAt(m.staniumField.until)) : 'выключено',
+    m.staniumField.active ? 'hot' : ''));
+  ['black_metal', 'colored_metal', 'precious_metal'].forEach(function (id) {
+    out.push(chip(RU[id], fmt(e.metals[id] || 0)));
+  });
+  out.push(chip('хлам', fmt(e.junkUnits) + '/' + fmt(e.junkCap), e.junkUnits >= e.junkCap ? 'neg' : ''));
+  out.push(chip('роботы', e.builders.busy + '/' + e.builders.max, e.builders.free === 0 ? 'hot' : ''));
+  out.push(chip('рейтинг', e.pvp.rating + ' (' + e.pvp.ladder.name + ')'));
+  out.push(chip('атаки', e.pvp.attacksRemaining < 0 ? '∞' : e.pvp.attacksRemaining));
+  box.innerHTML = out.join('');
+}
+
+function renderEconomy(e) {
+  var assistLimit = e.energy.assist.limitPerDay > 0 ? e.energy.assist.limitPerDay : '∞';
+  $('tagEnergy').textContent = 'реген ' + e.energy.regenPerHour + '/ч · ассистов ' + e.energy.assist.remainingToday + '/' + assistLimit;
+  var rows = e.warehouses.map(function (w) {
+    return '<tr>' + td(RU[w.resource] || w.resource) + td(fmt(w.stored), 'num') + td(fmt(w.capacity), 'num') +
+      td(fmt(w.ratePerHour) + '/ч', 'num') + td(w.isFull ? '<span class="warn">полон</span>' : leftAt(w.nextFillAt), 'num') + '</tr>';
+  });
+  $('warehouses').innerHTML = table(
+    [{ t: 'склад' }, { t: 'на складе', num: 1 }, { t: 'кап', num: 1 }, { t: 'ставка', num: 1 }, { t: 'заполнится', num: 1 }],
+    rows
+  );
+}
+
+/**
+ * Снимок энергосети и постройки сооружений.
+ *
+ * Отдельная секция, а не достройка «Экономики», потому что отвечает на другой вопрос:
+ * склады — «что лежит», сеть — «что прямо сейчас работает и почему нет». Игрок,
+ * потерявший ASIC из-за пустой крио-цистерны, обязан увидеть причину в той же
+ * таблице, где видит следствие.
+ */
+function renderPower(e) {
+  var p = e.power;
+  var WHY = { fuel: 'нет топлива', power: 'нет мощности', cooling: 'нет азота', output: 'некуда лить' };
+  $('tagPower').textContent = p.isBalanced
+    ? ('баланс · резерв ' + fmt(p.reserve) + ' кВт')
+    : 'дефицит / перегрев';
+
+  $('powerBalance').innerHTML = table(
+    [{ t: 'контур' }, { t: 'онлайн', num: 1 }, { t: 'лимит', num: 1 }, { t: 'остаток', num: 1 }],
+    [
+      '<tr>' + td('мощность, кВт') + td(fmt(p.supplyOnline), 'num') + td(fmt(p.demandOnline), 'num') +
+        td(p.reserve > 0 ? '<span class="ok">' + fmt(p.reserve) + '</span>' : '<span class="neg">0</span>', 'num') + '</tr>',
+      '<tr>' + td('тепло, кВт') + td(fmt(p.heatLoad), 'num') + td(fmt(p.coolingCap), 'num') +
+        td(p.heatLoad <= p.coolingCap ? '<span class="ok">' + fmt(p.coolingCap - p.heatLoad) + '</span>'
+          : '<span class="neg">+' + fmt(p.heatLoad - p.coolingCap) + '</span>', 'num') + '</tr>',
+      '<tr>' + td('азот, ед/ч') + td(fmt(p.nitrogenPerHour), 'num') + td('—', 'num') +
+        td(p.starvedCooling ? '<span class="neg">кулерам не хватает</span>' : '<span class="muted">норма</span>', 'num') + '</tr>',
+      '<tr>' + td('SEC, ед/ч') + td(fmt(p.secPerHour), 'num') + td('—', 'num') +
+        td('<span class="muted">в кошельке ' + fmt(e.resources.secSpendable) + '</span>', 'num') + '</tr>'
+    ]
+  );
+
+  $('powerRows').innerHTML = (p.rows || []).length === 0
+    ? '<div class="muted">сеть пуста</div>'
+    : table(
+        [{ t: 'группа' }, { t: 'онлайн', num: 1 }, { t: 'причина', num: 1 }],
+        p.rows.map(function (r) {
+          return '<tr>' + td(esc(r.name) + ' <span class="muted">' + (r.source === 'unit' ? 'техника' : 'сооружение') + '</span>') +
+            td(r.online + '/' + r.instances, 'num') +
+            td(r.reason ? '<span class="neg">' + (WHY[r.reason] || r.reason) + '</span>' : '<span class="ok">в строю</span>', 'num') +
+            '</tr>';
+        })
+      );
+
+  $('structures').innerHTML = table(
+    [{ t: 'сооружение' }, { t: 'шт', num: 1 }, { t: 'кВт', num: 1 }, { t: 'тепло', num: 1 }, { t: 'сборка', num: 1 }, { t: '' }],
+    (e.structures || []).map(function (s) {
+      return '<tr>' + td(esc(s.name) + ' <span class="muted">T' + s.tier + '</span>' +
+          (s.unlocked ? '' : ' <span class="neg">нет предшественника</span>')) +
+        td(s.count, 'num') +
+        td((s.power >= 0 ? '+' : '') + fmt(s.power), 'num') +
+        td(fmt(s.heat), 'num') +
+        td(dur(s.buildMs), 'num') +
+        td('<button onclick="act.buildStructure(\'' + s.id + '\')" ' + (s.unlocked ? '' : 'disabled') + '>строить</button>') +
+        '</tr>';
+    })
+  );
+}
+
+function renderWorkshop(e) {
+  $('tagBuilders').textContent = 'занято ' + e.builders.busy + '/' + e.builders.max +
+    (e.builders.nextFreeAt ? ' · свободен через ' + leftAt(e.builders.nextFreeAt) : '');
+
+  var rows = (e.builds || []).map(function (b) {
+    var q = b.speedup || {};
+    var actions = b.done
+      ? '<span class="warn">готово, ждёт инвентарь</span>'
+      : '<button onclick="act.speedup(\'' + b.id + '\')" ' + (q.canSpeedup ? '' : 'disabled ') + '>добить · ' +
+        (q.cost == null ? '?' : q.cost) + ' хро.</button>' +
+        '<input type="number" id="sp_' + b.id + '" value="1" min="1" style="width:54px">' +
+        '<button onclick="act.speedupPartial(\'' + b.id + '\')">частично</button>';
+    return '<tr>' + td(esc(b.name || b.code) + ' <span class="muted">ур.' + b.level + '</span>') +
+      td(b.done ? '0с' : dur(b.remainingMs), 'num') + td(actions) + '</tr>';
+  });
+  $('queue').innerHTML = rows.length
+    ? table([{ t: 'очередь стройки' }, { t: 'осталось', num: 1 }, { t: 'ускорение (хрониум)' }], rows)
+    : '<div class="muted">очередь пуста</div>';
+
+  var all = (e.speedup && e.speedup.all) || {};
+  $('speedupAllQuote').textContent = all.count
+    ? ('работ: ' + all.count + ' · срок ' + dur(all.savedMs) + ' → ' + all.cost + ' хро.' +
+      (all.canSpeedup ? '' : ' · нельзя: ' + all.reason))
+    : 'нечего ускорять';
+}
+
+function renderInventory(e) {
+  var items = e.inventory || [];
+  $('tagInv').textContent = items.length + ' шт.';
+  var rows = items.slice(0, 60).map(function (it) {
+    return '<tr>' + td(esc(it.name || it.code) + ' <span class="muted">ур.' + it.level + ' · ' + it.kind + '</span>') +
+      td('<button onclick="act.dismantle(\'' + it.id + '\',\'salvage\')">разбор</button>' +
+        '<button onclick="act.dismantle(\'' + it.id + '\',\'scrap\')" class="err">в хлам</button>') + '</tr>';
+  });
+  $('inventory').innerHTML = rows.length
+    ? table([{ t: 'предметы' }, { t: 'мастерская' }], rows)
+    : '<div class="muted">пусто — соберите первое в мастерской</div>';
+}
+
+function renderRecycle(e) {
+  var rows = Object.keys(e.junk || {}).map(function (id) {
+    var recipe = shop && shop.junk ? shop.junk.find(function (j) { return j.id === id; }) : null;
+    var yields = recipe && recipe.recipe ? JSON.stringify(recipe.recipe.yields) : '';
+    var tech = recipe && recipe.recipe && recipe.recipe.tech ? ' +' + JSON.stringify(recipe.recipe.tech) : '';
+    return '<tr>' + td(RU[id] || id) + td(fmt(e.junk[id]), 'num') +
+      td('<span class="muted">' + esc(yields + tech) + '</span>') + '</tr>';
+  });
+  $('junkTable').innerHTML = rows.length
+    ? table([{ t: 'хлам' }, { t: 'есть', num: 1 }, { t: 'рецепт' }], rows)
+    : '<div class="muted">хлама нет — он падает после боёв</div>';
+}
+
+function renderMaterials(e) {
+  var m = e.materials;
+  var f = m.staniumField;
+  $('staniumField').innerHTML = f.active
+    ? ('<div class="ok">Активно до ' + new Date(f.until).toLocaleTimeString('ru-RU') + ' · осталось ' + dur(f.remainingMs) +
+      '<br>Атакующие медленнее на ' + f.slowPercent + '% (множитель ' + f.speedMultiplier + ')</div>')
+    : '<div class="muted">Выключено. Множитель атакующих: ' + f.speedMultiplier + '</div>';
+
+  var rules = (mats && mats.rules) || {};
+  $('quoteBox').innerHTML = 'Курс станка: ' + (rules.metals || []).map(function (x) {
+    return esc(x.id) + ' ×' + x.yieldPerAsterium;
+  }).join(' · ') + '<br>Потолок закладки: ' + (rules.conversionMaxBatch || '—') + ' астерия';
+}
+
+function renderShop() {
+  var catalog = (cfg && cfg.catalog) || [];
+  var rows = catalog.map(function (item) {
+    return '<tr>' + td(esc(item.label) + ' <span class="muted">' + esc(item.sku) + '</span>') +
+      td(item.priceRub + ' ₽', 'num') +
+      td('<button onclick="act.buy(\'' + esc(item.sku) + '\')">Купить</button>') + '</tr>';
+  });
+  $('catalog').innerHTML = rows.length
+    ? table([{ t: 'витрина' }, { t: 'цена', num: 1 }, { t: '' }], rows)
+    : '<div class="muted">каталог не загружен</div>';
+}
+
+function renderOrders() {
+  var rows = orders.map(function (o) {
+    var dev = o.status === 'pending'
+      ? '<button onclick="act.confirmPay(\'' + esc(o.id) + '\')" class="ok">подтвердить оплату</button>'
+      : (o.status === 'fulfilled'
+        ? '<button onclick="act.refundPay(\'' + esc(o.id) + '\')" class="err">возврат</button>'
+        : '');
+    return '<tr>' + td('<span class="' + (o.status === 'fulfilled' ? 'ok' : o.status === 'refunded' ? 'err' : 'muted') + '">' +
+      esc(o.status) + '</span> ' + esc(o.sku)) + td(o.priceRub + ' ₽', 'num') + td(dev) + '</tr>';
+  });
+  $('orders').innerHTML = rows.length
+    ? table([{ t: 'заказы' }, { t: 'цена', num: 1 }, { t: 'стенд' }], rows)
+    : '<div class="muted">заказов нет</div>';
+}
+
+function renderAds(e) {
+  var ads = e.ads || {};
+  $('adSession').innerHTML = ads.pendingSessionId
+    ? ('Сессия <b>' + esc(ads.pendingSessionId) + '</b> · истекает через ' + leftAt(ads.pendingExpiresAt))
+    : ('Сессии нет. Сегодня посмотрено: ' + ads.claimedToday + '/' + (ads.dailyLimit > 0 ? ads.dailyLimit : '∞') +
+      (ads.enabled ? '' : ' · <span class="err">ADS_ENABLED=false</span>'));
+}
+
+function renderPvp(e) {
+  var p = e.pvp;
+  $('tagPvp').textContent = p.rating + ' · ' + p.ladder.name + ' · атак ' + (p.attacksRemaining < 0 ? '∞' : p.attacksRemaining);
+
+  if (opponent) {
+    $('opponent').innerHTML = '<b>' + esc(opponent.label) + '</b> · рейтинг ' + opponent.rating +
+      ' · стен ' + opponent.walls + ' · единиц ' + opponent.units +
+      (opponent.report && opponent.report.ready ? ' <span class="ok">база годна</span>' : ' <span class="err">база не годна</span>') +
+      '<br><span class="muted">corridor attempt ' + opponent.attempt + ', band ±' + opponent.band + '</span>';
+  }
+
+  var drones = (e.inventory || []).filter(function (it) { return it.kind === 'drone'; });
+  var rows = drones.map(function (d) {
+    return '<tr><td><label><input type="checkbox" class="armyPick" value="' + esc(d.id) + '"> ' +
+      esc(d.name || d.code) + ' <span class="muted">ур.' + d.level + '</span></label></td></tr>';
+  });
+  $('army').innerHTML = rows.length
+    ? '<div class="muted" style="margin-bottom:4px">армия (дроны):</div>' + rows.join('')
+    : '<div class="muted">дронов нет — соберите их в мастерской, рейд без них не ходит</div>';
+}
+
+function renderBase(e) {
+  var b = e.base || {};
+  var report = b.report || {};
+  $('baseReport').innerHTML =
+    'Версия планировки: ' + (b.version == null ? '—' : b.version) +
+    '<br>Штаб: ' + esc(JSON.stringify(b.hq || {})) +
+    '<br>Стен: ' + ((b.walls || []).length) + '/' + (report.maxWalls == null ? '—' : report.maxWalls) +
+    ' · единиц: ' + ((b.units || []).length) + '/' + (report.maxUnits == null ? '—' : report.maxUnits) +
+    '<br>Проходимость: ' + (report.ready ? '<span class="ok">да</span>' : '<span class="err">нет</span>') +
+    (report.notices && report.notices.length ? '<br><span class="warn">' + esc(report.notices.join(', ')) + '</span>' : '');
+}
+
+function renderLedger() {
+  if (!ledger) return;
+  $('tagLedger').textContent = ledger.count + ' записей';
+  var rows = ledger.entries.slice(0, 40).map(function (en) {
+    return '<tr>' + td(new Date(en.ts).toLocaleTimeString('ru-RU')) +
+      td(esc(en.currency)) +
+      td('<span class="' + (en.delta < 0 ? 'err' : 'ok') + '">' + (en.delta > 0 ? '+' : '') + fmt(en.delta) + '</span>', 'num') +
+      td(fmt(en.balanceAfter), 'num') +
+      td('<span class="muted">' + esc(en.reason) + '</span>') + '</tr>';
+  });
+  $('ledger').innerHTML = table(
+    [{ t: 'время' }, { t: 'валюта' }, { t: 'Δ', num: 1 }, { t: 'баланс', num: 1 }, { t: 'причина' }],
+    rows
+  );
+}
+
+// ─── Действия ────────────────────────────────────────────────────────────────────
+function val(id) { return $(id).value; }
+function intVal(id) { return parseInt($(id).value, 10) || 0; }
+function freshKey(prefix) { return prefix + ':' + Date.now() + ':' + Math.floor(Math.random() * 1e6); }
+
+var act = {};
+window.act = act;
+
+act.collect = function () { run(function () { return api('POST', '/v1/economy/collect'); }); };
+
+/**
+ * Сооружение строится тем же маршрутом, что и предмет: сервер сам различает контракты
+ * по коду и отвечает `structure` вместо `blueprint`. Фронт не угадывает природу
+ * постройки — иначе «реактор в клетке лабиринта» стал бы достижимым состоянием.
+ */
+act.buildStructure = function (code) {
+  run(async function () {
+    var r = await api('POST', '/v1/workshop/build', { code: code });
+    var res = r.result || {};
+    logLine('в очередь: ' + code + (res.structure ? ' (сооружение)' : ' (предмет)') +
+      ' · роботов занято ' + res.busy);
+  });
+};
+
+act.assist = function () {
+  run(function () { return api('POST', '/v1/energy/assist', { helperId: freshKey('friend') }); });
+};
+
+act.build = function () {
+  run(function () { return api('POST', '/v1/workshop/build', { code: val('bpSelect') }); });
+};
+
+act.speedup = function (jobId) {
+  run(function () { return api('POST', '/v1/workshop/build/' + jobId + '/speedup', {}); });
+};
+
+act.speedupPartial = function (jobId) {
+  var amount = parseInt($('sp_' + jobId).value, 10) || 1;
+  run(function () {
+    return api('POST', '/v1/workshop/build/' + jobId + '/speedup', { chronium: amount }, { idem: freshKey('rush') });
+  });
+};
+
+act.speedupAll = function () {
+  run(function () { return api('POST', '/v1/workshop/build/speedup-all', {}, { idem: freshKey('rushall') }); });
+};
+
+act.dismantle = function (itemId, mode) {
+  run(function () {
+    return api('POST', '/v1/workshop/item/' + itemId + '/dismantle', { mode: mode }, { idem: freshKey('dism') });
+  });
+};
+
+act.recycle = function () {
+  var amount = intVal('junkAmount');
+  run(function () {
+    return api('POST', '/v1/workshop/recycle', { junk: val('junkSelect'), amount: amount }, { idem: freshKey('rec') });
+  });
+};
+
+act.quote = function () {
+  var metal = val('metalSelect');
+  var amount = intVal('convertAmount');
+  run(async function () {
+    var r = await api('GET', '/v1/materials/conversion?metal=' + encodeURIComponent(metal) + '&amount=' + amount);
+    var q = r.quote || {};
+    $('quoteBox').innerHTML = '<span class="ok">' + amount + ' астерия → ' + fmt(q.yields) + ' ' + esc(q.metal) +
+      ' (курс ×' + q.rate + ')</span>';
+  });
+};
+
+act.convert = function () {
+  run(function () {
+    return api('POST', '/v1/materials/convert', { metal: val('metalSelect'), amount: intVal('convertAmount') },
+      { idem: freshKey('conv') });
+  });
+};
+
+act.chargeStanium = function () {
+  run(function () {
+    return api('POST', '/v1/materials/stanium/charge', { units: intVal('staniumUnits') }, { idem: freshKey('sta') });
+  });
+};
+
+act.clearLog = function () { $('log').textContent = ''; };
+
+act.buy = function (sku) {
+  run(async function () {
+    await api('POST', '/v1/shop/orders', { sku: sku });
+    await loadOrders();
+  });
+};
+
+act.buyBuilder = function () {
+  run(function () { return api('POST', '/v1/shop/builders', {}, { idem: freshKey('builder') }); });
+};
+
+act.confirmPay = function (orderId) {
+  run(async function () {
+    await api('POST', '/v1/dev/payments/confirm', { orderId: orderId, providerOrderId: freshKey('vk') });
+    await loadOrders();
+  });
+};
+
+act.refundPay = function (orderId) {
+  run(async function () {
+    await api('POST', '/v1/dev/payments/refund', { orderId: orderId });
+    await loadOrders();
+  });
+};
+
+act.adOpen = function () {
+  run(async function () {
+    var r = await api('POST', '/v1/ads/session', { sku: val('adSelect') });
+    adSessionId = r.result && r.result.session ? r.result.session.id : null;
+  });
+};
+
+act.adClaim = function () {
+  run(function () {
+    if (!adSessionId) throw new Error('Сначала нажмите «Смотреть» — награда выдаётся только по подтверждённому показу');
+    return api('POST', '/v1/ads/claim', { sessionId: adSessionId });
+  });
+};
+
+act.adAbandon = function () {
+  run(async function () {
+    if (!adSessionId) return;
+    await api('POST', '/v1/ads/abandon', { sessionId: adSessionId });
+    adSessionId = null;
+  });
+};
+
+act.opponent = function () {
+  run(async function () {
+    var r = await api('GET', '/v1/pvp/opponent');
+    opponent = r.opponent || null;
+    render();
+  });
+};
+
+act.raid = function () {
+  run(async function () {
+    if (!opponent) throw new Error('Сначала найдите соперника');
+    var picks = Array.prototype.slice.call(document.querySelectorAll('.armyPick'))
+      .filter(function (box) { return box.checked; })
+      .map(function (box) { return box.value; });
+    if (picks.length === 0) throw new Error('Не выбрано ни одного дрона — армия пуста');
+    var r = await api('POST', '/v1/pvp/raid', { defenderId: opponent.defenderId, armyItemIds: picks });
+    showBattle(r.result || {});
+    opponent = null;
+  });
+};
+
+act.base = function () {
+  run(async function () {
+    var r = await api('GET', '/v1/base');
+    var report = r.result && r.result.report ? r.result.report : {};
+    $('baseReport').innerHTML = '<span class="muted">нарушения проходимости:</span> ' +
+      esc(JSON.stringify(report.analysis && report.analysis.violations || [])) +
+      '<br><span class="muted">годна: </span>' + (report.ready ? '<span class="ok">да</span>' : '<span class="err">нет</span>');
+  });
+};
+
+act.clearBase = function () { run(function () { return api('DELETE', '/v1/base/layout'); }); };
+
+act.grant = function () {
+  run(function () {
+    return api('POST', '/v1/dev/grant', {
+      sec: intVal('gSec'),
+      asteriumPurchased: intVal('gPurchased'),
+      asteriumEarned: intVal('gEarned'),
+      chronium: intVal('gChronium'),
+      wolfram: intVal('gWolfram'),
+      stanium: intVal('gStanium'),
+      black_metal: intVal('gBlack'),
+      colored_metal: intVal('gColored'),
+      precious_metal: intVal('gPrecious'),
+      chips: intVal('gJunk')
+    });
+  });
+};
+
+act.seed = function () {
+  run(function () {
+    return api('POST', '/v1/dev/seed-opponents', { count: intVal('seedCount'), stanium: intVal('seedStanium') });
+  });
+};
+
+act.ledger = function () {
+  run(async function () {
+    var reason = val('ledgerReason');
+    var path = '/v1/ledger?limit=60' + (reason ? '&reason=' + encodeURIComponent(reason) : '');
+    ledger = await api('GET', path);
+    render();
+  });
+};
+
+function showBattle(r) {
+  var b = r.battle || {};
+  var cls = b.outcome === 'win' ? 'ok' : b.outcome === 'loss' ? 'err' : 'warn';
+  var at = r.rating && r.rating.attacker ? r.rating.attacker : {};
+  $('battle').innerHTML =
+    '<div class="' + cls + '" style="margin-top:6px">Исход: <b>' + esc(b.outcome) + '</b> · ' + esc(b.endedBy) +
+    ' · тиков ' + b.ticks + ' · уничтожено единиц ' + b.destroyed +
+    '<br>Множитель скорости атакующего: <b>' + (b.attackerSpeedMultiplier == null ? '—' : b.attackerSpeedMultiplier) +
+    '</b> <span class="muted">(0.75 = станиумное поле защитника работало)</span>' +
+    '<br>Рейтинг: ' + at.before + ' → ' + at.after + ' (' + (at.delta > 0 ? '+' : '') + at.delta + ')' +
+    '<br>Лут: ' + esc(JSON.stringify(r.loot)) +
+    '<br>Украдено со складов: ' + esc(JSON.stringify(r.stolen)) +
+    '<br>Сеть обороны: <b>' + ((b.power || {}).unpowered == null ? '—' : b.power.unpowered) + '</b> башен встретили бой обесточенными, ' +
+    '<b>' + ((b.power || {}).overheatEvents == null ? '—' : b.power.overheatEvents) + '</b> перегрев(ов), ' +
+    '<b>' + ((b.power || {}).overheatedTicks == null ? '—' : b.power.overheatedTicks) + '</b> тактов простоя по теплу' +
+    '<br>Дейтерий сожжён: атака <b>' + fmt((b.fuel || {}).attackerDeuterium || 0) + '</b>, оборона <b>' +
+    fmt((b.fuel || {}).defenderDeuterium || 0) + '</b> <span class="muted">(по факту длительности, резерв был на 180 с)</span>' +
+    '<br>Энергия: ' + (r.energy ? r.energy.before + ' → ' + r.energy.after : '—') +
+    (r.defenderCommitted ? '' : '<br><span class="err">defenderCommitted=false — документ защитника не обновлён</span>') +
+    '</div>';
+}
+</script>
+</body>
+</html>

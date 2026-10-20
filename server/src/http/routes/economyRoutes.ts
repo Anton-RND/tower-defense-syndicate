@@ -1,0 +1,93 @@
+import type { FastifyInstance } from 'fastify';
+
+import { LEDGER_REASONS, type LedgerReason } from '../../modules/ledger/ledger.types.js';
+import { grantAssistEnergy } from '../../modules/economy/energy.js';
+import { collectWarehouse } from '../../modules/economy/mining.js';
+import { validationError } from '../../lib/errors.js';
+import { authHook, claimsOf } from '../auth.js';
+import type { AppContext } from '../context.js';
+import { accountAction, bodyOf, optionalStringOf, queryInt, viewOf } from '../helpers.js';
+
+/**
+ * Склад, энергия и журнал (п.2.1–2.3).
+ *
+ * GET /v1/me — не «только чтение». Тик экономики по договору применяется «при каждом
+ * запросе» (п.1 ТЗ), поэтому снятие витрины догоняет состояние аккаунта и пишет его.
+ * Отсюда две следствия, которые нужно держать в голове: revision игрока растёт на
+ * каждом опросе, и опрос идемпотентен по времени (повтор в тот же такт ничего не
+ * меняет). Для прода это заменяется на явный `POST /v1/tick` + кэш витрины, но не на
+ * откат тика: игрок, закрывший приложение на ночь, обязан увидеть добычу.
+ */
+export function registerEconomyRoutes(app: FastifyInstance, ctx: AppContext): void {
+  const auth = { preHandler: authHook(ctx) };
+
+  app.get('/v1/economy', auth, async (request) => {
+    const now = ctx.now();
+    const { account } = await accountAction(ctx, claimsOf(request).sub, now, (synced) => ({
+      account: synced,
+      meta: null
+    }));
+    return viewOf(ctx.config, account, now);
+  });
+
+  app.post('/v1/economy/collect', auth, async (request) => {
+    const now = ctx.now();
+    const { account, meta } = await accountAction(ctx, claimsOf(request).sub, now, (synced) => {
+      const result = collectWarehouse(synced, now);
+      return { account: result.account, drafts: result.drafts, meta: result };
+    });
+    ctx.logger.info('warehouse_collected', { userId: account.id, collected: meta.collected });
+    return {
+      ...viewOf(ctx.config, account, now),
+      result: { collected: meta.collected, drafts: meta.drafts.length }
+    };
+  });
+
+  app.post('/v1/energy/assist', auth, async (request) => {
+    const now = ctx.now();
+    const helperId = optionalStringOf(bodyOf(request), 'helperId', 64);
+    const { account, meta } = await accountAction(ctx, claimsOf(request).sub, now, (synced) => {
+      const result = grantAssistEnergy(synced, helperId ?? `anon:${now.getTime()}`, now, ctx.config.economy);
+      return { account: result.account, drafts: result.drafts, meta: result };
+    });
+    return {
+      ...viewOf(ctx.config, account, now),
+      result: {
+        granted: meta.granted,
+        nominal: meta.nominal,
+        energy: meta.energy,
+        remainingToday: meta.remainingToday
+      }
+    };
+  });
+
+  app.get('/v1/ledger', auth, async (request, reply) => {
+    const limit = queryInt(request, 'limit', { min: 1, max: 500, fallback: 50 });
+    const rawReason = (request.query as Record<string, unknown>)['reason'];
+    let reasons: LedgerReason[] | undefined;
+    if (typeof rawReason === 'string' && rawReason.trim().length > 0) {
+      const reason = rawReason.trim() as LedgerReason;
+      if (!LEDGER_REASONS.includes(reason)) {
+        throw validationError(`Неизвестная причина движения: ${rawReason}`, { allowed: LEDGER_REASONS });
+      }
+      reasons = [reason];
+    }
+    const entries = await ctx.ledger.list(claimsOf(request).sub, { limit, reasons });
+    reply.header('x-ledger-count', String(entries.length));
+    return {
+      count: entries.length,
+      entries: entries.map((entry) => ({
+        id: entry.id,
+        ts: entry.ts,
+        currency: entry.currency,
+        delta: entry.delta,
+        balanceAfter: entry.balanceAfter,
+        reason: entry.reason,
+        refType: entry.refType,
+        refId: entry.refId,
+        idempotencyKey: entry.idempotencyKey,
+        meta: entry.meta ?? null
+      }))
+    };
+  });
+}
