@@ -548,13 +548,19 @@ function renderPower(e) {
       );
 
   $('structures').innerHTML = table(
-    [{ t: 'сооружение' }, { t: 'шт', num: 1 }, { t: 'кВт', num: 1 }, { t: 'тепло', num: 1 }, { t: 'сборка', num: 1 }, { t: '' }],
+    [{ t: 'сооружение' }, { t: 'шт', num: 1 }, { t: 'кВт', num: 1 }, { t: 'тепло', num: 1 }, { t: 'SEC', num: 1 }, { t: 'сборка', num: 1 }, { t: '' }],
     (e.structures || []).map(function (s) {
+      // Цена следующего экземпляра: у ASIC-стоек она растёт с количеством (secCostGrowth),
+      // поэтому «350» в конфиге и «1530» в прайсе на четырнадцатой стойке — одно и то же число.
+      var price = s.secCost > 0
+        ? (s.secCost > (e.resources.secSpendable || 0) ? '<span class="neg">' + fmt(s.secCost) + '</span>' : fmt(s.secCost))
+        : '—';
       return '<tr>' + td(esc(s.name) + ' <span class="muted">T' + s.tier + '</span>' +
           (s.unlocked ? '' : ' <span class="neg">нет предшественника</span>')) +
         td(s.count, 'num') +
         td((s.power >= 0 ? '+' : '') + fmt(s.power), 'num') +
         td(fmt(s.heat), 'num') +
+        td(price, 'num') +
         td(dur(s.buildMs), 'num') +
         td('<button onclick="act.buildStructure(\'' + s.id + '\')" ' + (s.unlocked ? '' : 'disabled') + '>строить</button>') +
         '</tr>';

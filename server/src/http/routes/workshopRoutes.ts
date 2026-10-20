@@ -58,7 +58,14 @@ export function registerWorkshopRoutes(app: FastifyInstance, ctx: AppContext): v
       const result = startBuild(synced, code, now, ctx.idFactory);
       return { account: result.account, drafts: result.drafts, meta: result };
     });
-    ctx.logger.info('build_started', { userId: account.id, code, jobId: meta.job.id });
+    ctx.logger.info('build_started', {
+      userId: account.id,
+      code,
+      jobId: meta.job.id,
+      // Монета в логе обязательна: это единственная на сегодня трата SEC, и по ней
+      // поддержка отвечает на вопрос «куда делись деньги» без чтения журнала.
+      secSpent: meta.secCost
+    });
     return {
       ...viewOf(ctx.config, account, now),
       result: {
@@ -67,6 +74,11 @@ export function registerWorkshopRoutes(app: FastifyInstance, ctx: AppContext): v
         // Непусто ровно одно из двух: фронт по этому полю решает, рисовать «башню» или
         // «здание» — и не должен угадывать это по коду.
         structure: meta.structure,
+        // Сколько SEC списано этой стройкой (0 — денег не взяли). Фронт обязан показать
+        // факт списания ответом сервера, а не догадываться по диффу кошелька между
+        // двумя запросами: догадка по диффу теряет каждую транзакцию, случись между
+        // запросами ещё один тик.
+        secSpent: meta.secCost,
         busy: meta.busyAfter,
         free: meta.freeAfter
       }

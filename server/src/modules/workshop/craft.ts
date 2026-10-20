@@ -16,13 +16,14 @@ import {
   MAX_STRUCTURE_TOTAL,
   getStructure,
   isStructureId,
+  structureSecCost,
   structuresTotal,
   type StructureDef,
   type StructureId
 } from '../../config/structures.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
 import { effectiveBuildRobots } from '../economy/entitlements.js';
-import { payMaterials, spendTech } from '../economy/wallet.js';
+import { payMaterials, spendSec, spendTech } from '../economy/wallet.js';
 import { makeIdempotencyKey, type LedgerDraft } from '../ledger/ledger.types.js';
 import type { BuildJob, InventoryItem, StructureCounts, UserAccount } from '../user/user.types.js';
 
@@ -141,14 +142,23 @@ export interface StartBuildResult {
   /** Непусто ровно для одного из `blueprint`/`structure`: предмет или здание. */
   blueprint: Blueprint | null;
   structure: StructureDef | null;
+  /**
+   * Сколько SEC списано этой стройкой (0 — денег не взяли). Отдельное поле, а не
+   * графа в `drafts`: фронт обязан показать «за стройку ушло 350 SEC» ответом на
+   * запрос, а не пересчётом журнала.
+   */
+  secCost: number;
   busyAfter: number;
   freeAfter: number;
 }
 
 /**
- * Запуск стройки: списывает материалы, занимает свободного робота.
+ * Запуск стройки: списывает материалы (и монету, если у сооружения есть `secCost`),
+ * занимает свободного робота.
  * Всё или ничего: не хватило любого материала — INSUFFICIENT_FUNDS из редуктора,
- * транзакция не записывается, очередь не трогается.
+ * транзакция не записывается, очередь не трогается. Порядок проверок тоже «всё или
+ * ничего»: лимиты сооружения (`assertStructureSlot`) смотрятся ДО первой оплаты,
+ * иначе игрок заплатил бы вольфрамом и получил отказ по лимиту.
  */
 /**
  * Можно ли поставить ещё один экземпляр сооружения.
@@ -243,6 +253,33 @@ export function startBuild(
     idempotencyKeyFor: (id) => makeIdempotencyKey('build', `${jobId}:${id}`)
   });
 
+  // Второй платёж — монетой. Цена считается по числу стоек, уже стоящих на базе
+  // (`base`, а не `paid.account`: сырьё количество экземпляров не меняет, оно
+  // прирастает в `settleBuilds` по окончании стройки).
+  //
+  // Ключ обязан содержать валюту — инвариант №1 (modules/ledger/ledger.types.ts):
+  // без `:sec` второе движение этой же оплаты попало бы под уникальный индекс
+  // первого и монеты ушли бы с баланса без аудиторского следа.
+  let accountAfterPay = paid.account;
+  const drafts = [...paid.drafts];
+  let secPrice = 0;
+  if (structure) {
+    const owned = base.structures[structure.id] ?? 0;
+    secPrice = structureSecCost(structure, owned);
+    if (secPrice > 0) {
+      const coin = spendSec(accountAfterPay, secPrice, {
+        ts: now,
+        reason: 'craft',
+        refType: 'structure',
+        refId: code,
+        meta: { job: jobId, tier: def.tier, owned },
+        idempotencyKey: makeIdempotencyKey('build', `${jobId}:sec`)
+      });
+      accountAfterPay = coin.account;
+      drafts.push(coin.draft);
+    }
+  }
+
   const job: BuildJob = {
     id: jobId,
     code,
@@ -252,14 +289,15 @@ export function startBuild(
     endsAt: new Date(now.getTime() + def.buildMs)
   };
 
-  const next: UserAccount = { ...paid.account, builds: [...paid.account.builds, job] };
+  const next: UserAccount = { ...accountAfterPay, builds: [...accountAfterPay.builds, job] };
 
   return {
     account: next,
-    drafts: paid.drafts,
+    drafts,
     job,
     blueprint,
     structure,
+    secCost: secPrice,
     busyAfter: buildersBusy(next, now),
     freeAfter: buildersFree(next, now)
   };

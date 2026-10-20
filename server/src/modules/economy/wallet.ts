@@ -293,6 +293,41 @@ export function hasTechDebt(account: UserAccount): boolean {
   return account.materials.chronium < 0 || account.materials.wolfram < 0 || account.materials.stanium < 0;
 }
 
+// ─── Монета синдиката (SEC) ─────────────────────────────────────────────────
+
+/**
+ * Трата SEC.
+ *
+ * ПРИЧЕМ ЗДЕСЬ, А НЕ ПРЯМОЙ `debit(account, resource('sec'), …)` В МАРШРУТЕ
+ * ───────────────────────────────────────────────────────────────────────────
+ * Кошелёк монеты ДРОБНЫЙ (`secGained = coinRate × часы`), а тратить её разрешено
+ * ЦЕЛОЕ — ровно то число, которое витрина показала игроку как `secSpendable`
+ * (modules/economy/view.ts). Прямой `debit` это правило не проверит: он честно
+ * спишет 123.45, а игрок увидел 123. Расхождение между «сколько показал» и
+ * «сколько снял» — самый дорогой сорт бага в экономике, потому что виден только
+ * через месяц, по жалобе на баланс.
+ *
+ * Вторая причина — точка учёта. Пока SEC тратится из одного места, «откуда у игрока
+ * столько монет» и «куда они ушли» отвечаются одной функцией. Когда рынок (Часть 2)
+ * добавит вторую и третью трату, разбросанный `debit` превратится в N мест, где
+ * правило целости надо вспоминать вручную.
+ */
+export function spendSec(account: UserAccount, amount: number, ctx: MovementContext): Movement {
+  assertAmount(amount, ctx);
+  if (!Number.isInteger(amount)) {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, 400, 'SEC тратятся целыми единицами', {
+      amount,
+      reason: ctx.reason
+    });
+  }
+  return debit(account, resource('sec'), amount, ctx);
+}
+
+/** Доступный к трате остаток монеты — то же число, что витрина показывает игроку. */
+export function spendableSec(account: UserAccount): number {
+  return Math.floor(account.resources.sec);
+}
+
 // ─── Пачки материалов (чертежи, разбор, лут, переработка) ─────────────────────
 
 export interface MaterialContext extends MovementContext {

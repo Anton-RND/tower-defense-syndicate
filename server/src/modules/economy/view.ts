@@ -19,7 +19,7 @@ import {
   TECH_MATERIAL_IDS
 } from '../../config/materials.js';
 import { getBlueprint, junkTotal as junkUnitsTotal, type BuildKind, type ItemKind, type JunkInventory, type MetalsInventory } from '../../config/workshop.js';
-import { getStructure, STRUCTURES, type StructureId } from '../../config/structures.js';
+import { getStructure, structureSecCost, STRUCTURES, type StructureId } from '../../config/structures.js';
 import type { SessionClaims } from '../auth/token.js';
 import { describeBuilderShop, type BuilderShopView } from '../shop/builders.js';
 import { deployedUnitCodes, type EntitlementKind, type EntitlementSource, type ItemSource, type UserAccount } from '../user/user.types.js';
@@ -118,6 +118,12 @@ export interface StructureView {
   heat: number;
   buildMs: number;
   cost: Record<string, number>;
+  /**
+   * Цена в SEC на СЛЕДУЮЩИЙ экземпляр — уже с учётом того, сколько стоек стоит на
+   * базе. Не базовая `def.secCost`: `secCostGrowth` делает их разными числами, и
+   * витрина с базовой ценой обещала бы игроку 350, а взяла бы 1530.
+   */
+  secCost: number;
   /** Выполнены ли предпосылки (`requires`) — кнопка «строить» активна только при true. */
   unlocked: boolean;
 }
@@ -512,19 +518,23 @@ export function describeEconomy(account: UserAccount, now: Date, config: AppConf
     };
   });
 
-  const structures: StructureView[] = STRUCTURES.map((def) => ({
-    id: def.id,
-    name: def.name,
-    tier: def.tier,
-    count: account.structures[def.id] ?? 0,
-    power: def.power,
-    heat: def.heat,
-    buildMs: def.buildMs,
-    cost: { ...def.cost } as Record<string, number>,
-    unlocked: Object.entries(def.requires ?? {}).every(
-      ([code, need]) => (account.structures[code as StructureId] ?? 0) >= (need ?? 0)
-    )
-  }));
+  const structures: StructureView[] = STRUCTURES.map((def) => {
+    const count = account.structures[def.id] ?? 0;
+    return {
+      id: def.id,
+      name: def.name,
+      tier: def.tier,
+      count,
+      power: def.power,
+      heat: def.heat,
+      buildMs: def.buildMs,
+      cost: { ...def.cost } as Record<string, number>,
+      secCost: structureSecCost(def, count),
+      unlocked: Object.entries(def.requires ?? {}).every(
+        ([code, need]) => (account.structures[code as StructureId] ?? 0) >= (need ?? 0)
+      )
+    };
+  });
 
   const power: PowerView = {
     supplyOnline: grid.supplyOnline,
