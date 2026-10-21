@@ -7,6 +7,7 @@ import { publicConfig } from '../modules/economy/view.js';
 import { describeCatalog } from '../config/shop.js';
 import { describeAdOffers } from '../config/ads.js';
 import type { AppContext } from './context.js';
+import { resolveRequestId } from './security.js';
 import { loadDebugPage } from './debugPage.js';
 import { loadPlayPage } from './playPage.js';
 import { registerAdsRoutes } from './routes/adsRoutes.js';
@@ -33,7 +34,20 @@ import { registerWorkshopRoutes } from './routes/workshopRoutes.js';
  * «Cannot read property» разными словами.
  */
 export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, bodyLimit: 1 << 20 });
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 1 << 20,
+    // Идентификатор запроса заводится до всего остального: и лог, и головы, и
+    // отказ должны говорить одним id. Чужой `X-Request-Id` принимается, если он
+    // безопасен по алфавиту и длине, иначе — свой UUID (см. security.ts).
+    genReqId: (request) => resolveRequestId(request.headers['x-request-id'])
+  });
+
+  // Головы безопасности — на ВСЕ ответы, включая 404 и 429: отказ от входа
+  // ничем не отличается от отказа витрины по уровню доверия к transport-слою.
+  app.addHook('onRequest', async (request, reply) => {
+    ctx.security.headers(request, reply);
+  });
 
   const wildcard = ctx.config.allowedOrigins.includes('*');
   await app.register(cors, {
@@ -45,6 +59,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
 
   app.addHook('onResponse', (request, reply, done) => {
     ctx.logger.info('http_request', {
+      requestId: request.id,
       method: request.method,
       url: request.url,
       route: request.routeOptions?.url ?? null,
@@ -57,6 +72,13 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof AppError) {
+      // Retry-After из деталей ошибки: лимитер знает, когда освободится бакет, а
+      // клиент без заголовка обязан угадывать экспоненциальной задержкой и
+      // либо долбит раньше, либо висит дольше, чем нужно.
+      const retryAfter = error.details?.['retryAfterSec'];
+      if (error.code === ErrorCodes.RATE_LIMITED && typeof retryAfter === 'number' && retryAfter > 0) {
+        reply.header('Retry-After', String(Math.ceil(retryAfter)));
+      }
       reply.status(error.status).send(error.toJSON());
       return;
     }

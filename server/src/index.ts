@@ -37,14 +37,33 @@ async function main(): Promise<void> {
 
   let stopping = false;
   const shutdown = async (signal: string): Promise<void> => {
-    if (stopping) return;
+    if (stopping) {
+      // Второй сигнал означает, что оператор устал ждать: спорим сразу. Дожидаться
+      // watchdog'а здесь — значит не ответить на Ctrl+C вообще никогда.
+      ctx.logger.fatal('server_shutdown_forced', { signal, reason: 'second_signal' });
+      process.exit(1);
+      return;
+    }
     stopping = true;
-    ctx.logger.info('server_stopping', { signal });
+    ctx.logger.info('server_stopping', { signal, timeoutMs: ctx.config.shutdownTimeoutMs });
+
+    // Watchdog, а не бесконечное ожидание. `app.close` дожидается дозавершения
+    // живых запросов, а один зависший клиент удерживает этот процесс навсегда:
+    // оркестратор считает контейнер умирающим, не может его снять, и деплой встаёт.
+    const watchdog = setTimeout(() => {
+      ctx.logger.fatal('server_shutdown_timeout', { timeoutMs: ctx.config.shutdownTimeoutMs });
+      process.exit(1);
+    }, ctx.config.shutdownTimeoutMs);
+    // unref: таймер не имеет права сам держать процесс живым после успешного закрытия.
+    watchdog.unref();
+
     try {
       await app.close();
       await ctx.close();
+      clearTimeout(watchdog);
       process.exit(0);
     } catch (error) {
+      clearTimeout(watchdog);
       ctx.logger.fatal('server_shutdown_failed', { error });
       process.exit(1);
     }
@@ -52,6 +71,17 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+  // Необработанные состояния. Node и так валит процесс на unhandledRejection
+  // (с v15), но делает это без единой строки в структурированном логе — в
+  // контейнере остаётся только код выхода 1. Здесь причина успевает быть
+  // записанной, а сторы и фоновые циклы — закрытыми.
+  const onFatal = (kind: string, error: unknown): void => {
+    ctx.logger.fatal(kind, { error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+    void shutdown(kind);
+  };
+  process.on('unhandledRejection', (reason) => onFatal('unhandled_rejection', reason));
+  process.on('uncaughtException', (error) => onFatal('uncaught_exception', error));
 }
 
 main().catch((error: unknown) => {

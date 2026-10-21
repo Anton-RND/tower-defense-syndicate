@@ -81,7 +81,11 @@ function sessionOf(ctx: AppContext, account: UserAccount, now: Date, created: bo
 }
 
 export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void {
-  app.post('/v1/auth/vk/init-data', async (request) => {
+  // Бюджет на адрес, а не на игру: эти два маршрута — единственная необработанная
+  // точка, где можно гадать по чужим initData и подбирать socialId вслепую.
+  const authBudget = { preHandler: ctx.security.guard('auth') };
+
+  app.post('/v1/auth/vk/init-data', authBudget, async (request) => {
     const body = bodyOf(request);
     const initData = stringOf(body, 'initData', 8192);
     const now = ctx.now();
@@ -91,7 +95,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     return sessionOf(ctx, account, now, created);
   });
 
-  app.post('/v1/auth/dev-login', async (request) => {
+  app.post('/v1/auth/dev-login', authBudget, async (request) => {
     if (!ctx.config.devSignerEnabled) {
       throw forbidden('DEV_SIGNER_ENABLED выключен: вход по голому socialId разрешён только вне production');
     }

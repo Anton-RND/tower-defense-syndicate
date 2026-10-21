@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { loadConfig, type AppConfig } from '../config/env.js';
 import { Logger } from '../lib/logger.js';
+import { createSecurityLayer, type SecurityLayer } from './security.js';
 import { TokenService } from '../modules/auth/token.js';
 import { MemoryLedgerStore } from '../modules/ledger/ledger.memory.js';
 import { MongoLedgerStore } from '../modules/ledger/ledger.mongo.js';
@@ -70,6 +71,16 @@ export interface AppContext {
   readonly marketWorker: Loop;
   readonly tokens: TokenService;
   readonly logger: Logger;
+  /**
+   * Слой безопасности транспорта: бакеты по адресу клиента, защитные головы,
+   * идентификатор запроса.
+   *
+   * Живёт в контексте, а не собирается внутри `buildApp`, по той же причине, по
+   * какой там живут сторы: состояние обязано переживать отдельный запрос и быть
+   * ОДНИМ на все маршруты. Два бакета на один адрес — это два разных лимита, и
+   * «сколько запросов пропускает игра» перестаёт быть свойством конфигурации.
+   */
+  readonly security: SecurityLayer;
   /** Идентификаторы записей журнала и доменов. В проде — UUID; в тестах — свой. */
   readonly idFactory: () => string;
   /** Часы процесса. Одна точка, чтобы подменять время в тестах. */
@@ -181,6 +192,7 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
     tokens:
       overrides.tokens ??
       new TokenService({ secret: config.jwt.secret, ttlSec: config.jwt.ttlSec }),
+    security: overrides.security ?? createSecurityLayer(config),
     logger,
     idFactory,
     now,
