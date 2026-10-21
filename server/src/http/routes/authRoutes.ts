@@ -300,6 +300,35 @@ async function settleStoredReferral(
   return outcome;
 }
 
+/**
+ * Реферал не имеет права сорвать вход.
+ *
+ * Награда пригласившему — бонус поверх уже состоявшейся сессии: если отказал
+ * стор, упал журнал или документ пригласившего уехал за пределы истории, игрок
+ * всё равно обязан попасть в игру, а привязка обязана догнаться на следующем
+ * входе (ровно для этого `settledAt` и остаётся null до полного успеха).
+ *
+ * Без этой обёртки ошибка в награде другу превращала бы `/v1/auth/vk/init-data`
+ * в 500 — то есть социальная механика ломала вход целому поколению новичков.
+ */
+async function referralStep(
+  ctx: AppContext,
+  invitee: UserAccount,
+  what: 'apply' | 'settle',
+  run: () => Promise<ReferralOutcome | null>
+): Promise<ReferralOutcome | null> {
+  try {
+    return await run();
+  } catch (error) {
+    ctx.logger.warn('referral_step_failed', {
+      inviteeId: invitee.id,
+      what,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
 /** Итог входа: сессия плюс диагностика реферала, если метка приходила. */
 function sessionWithReferral(
   ctx: AppContext,
@@ -389,10 +418,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     // Реферал: свежая заявка принимается только на рождении аккаунта; на любом
     // следующем входе догоняется только то, что уже записано в документ новичка
     // (см. applyReferralClaim / settleStoredReferral).
-    const referral =
-      created && verified.referral
-        ? await applyReferralClaim(ctx, account, verified.referral, now)
-        : await settleStoredReferral(ctx, account, now);
+    const claim = created ? verified.referral : null;
+    const referral = claim
+      ? await referralStep(ctx, account, 'apply', () => applyReferralClaim(ctx, account, claim, now))
+      : await referralStep(ctx, account, 'settle', () => settleStoredReferral(ctx, account, now));
     ctx.vkAuth.accepted({
       scheme: verified.scheme,
       signKey: verified.signKey,
@@ -443,10 +472,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     // Тот же путь, что у боевого: dev-тело приходит из наших же рук, но реферал
     // обязан спотыкаться о те же правила антифрода, иначе стенд проверяет одну
     // ветку, а прод живёт по другой.
-    const referral =
-      created && ref
-        ? await applyReferralClaim(ctx, account, claimOfRef(ref), now)
-        : await settleStoredReferral(ctx, account, now);
+    const claim = created && ref ? claimOfRef(ref) : null;
+    const referral = claim
+      ? await referralStep(ctx, account, 'apply', () => applyReferralClaim(ctx, account, claim, now))
+      : await referralStep(ctx, account, 'settle', () => settleStoredReferral(ctx, account, now));
     ctx.logger.info('auth_dev_login', {
       userId: account.id,
       socialId,

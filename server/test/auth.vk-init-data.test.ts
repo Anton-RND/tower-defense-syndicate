@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { buildApp } from '../src/http/app.js';
 import { createContext, type AppContext } from '../src/http/context.js';
+import type { LedgerStore } from '../src/modules/ledger/ledger.store.js';
 import { signVkParams, type VkParams } from '../src/modules/auth/vk.signature.js';
 import { REFERRAL_REWARD_ASTERIUM, REFERRAL_REWARD_ENERGY } from '../src/modules/social/referral.js';
 import { testConfig } from './fixtures.js';
@@ -577,5 +578,68 @@ describe('health/vk-auth: наблюдение за входом без дост
     expect(response.body).not.toContain('uniq-session-hash-802');
     expect(response.body).not.toContain(SECRET);
     expect(response.body).not.toContain('viewer_id');
+  });
+});
+
+
+describe('auth/vk-init-data: сбой реферала не срывает вход', () => {
+  it('отказ журнала не отдаёт 500, а догон не удваивает награду', async () => {
+    const config = testConfig({
+      DEV_SIGNER_ENABLED: 'true',
+      VK_APP_ID: String(APP_ID),
+      VK_SECRET_KEY: SECRET
+    });
+    const base = createContext(config);
+    let journalDown = true;
+    // Ломаем только записи реферальной награды (`event`): стартовый комплект
+    // новичка обязан пройти — иначе проверка превращается в «вход упал по другой
+    // причине» и врёт про причину.
+    const ledger = new Proxy(base.ledger, {
+      get(target, property) {
+        if (property === 'appendMany') {
+          return async (entries: Parameters<LedgerStore['appendMany']>[0]) => {
+            if (journalDown && entries.some((entry) => entry.reason === 'event')) {
+              throw new Error('журнал событий не пишет');
+            }
+            return target.appendMany(entries);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      }
+    });
+    const ctx = createContext(config, {
+      users: base.users,
+      clans: base.clans,
+      lots: base.lots,
+      commodities: base.commodities,
+      ledger
+    });
+    const app = await buildApp(ctx);
+    opened.push(app);
+
+    const inviter = await login(app, 1000);
+    const signup = await postInitData(app, initDataOf(1001, { hash: `inv_${inviter.user.id}` }));
+    expect(signup.statusCode, signup.body).toBe(200);
+    const invitee = signup.json() as Session;
+    expect(invitee.created).toBe(true);
+    // Реферала в ответе нет — он не состоялся. Вход состоялся, и это главное:
+    // награда другу не имеет права ломать игроку игру.
+    expect(invitee.referral).toBeUndefined();
+    const bound = await ctx.users.findById(invitee.user.id);
+    expect(bound?.referral.invitedBy).toBe(inviter.user.id);
+    expect(bound?.referral.settledAt).toBeNull();
+
+    journalDown = false;
+    const retry = await postInitData(app, initDataOf(1001));
+    expect((retry.json() as Session).referral).toMatchObject({
+      source: 'stored',
+      credited: false,
+      reason: 'already-credited'
+    });
+    // Пригласивший получил награду один раз: его документ был записан до отказа
+    // журнала, поэтому догон обязан отказать как «уже награждён».
+    expect((await ctx.users.findById(inviter.user.id))?.referral.count).toBe(1);
+    expect((await ctx.users.findById(invitee.user.id))?.referral.settledAt).not.toBeNull();
   });
 });
