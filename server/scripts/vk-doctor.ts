@@ -10,14 +10,19 @@
  * с первой в тот момент, когда понадобится.
  *
  * УПОТРЕБЛЕНИЕ:
- *   npm run vk:doctor                       — конфиг + круговая подпись
+ *   npm run vk:doctor                       — конфиг + три круговые подписи
  *   npm run vk:doctor -- "<initData>"       — разбор реальной строки запуска
  *   npm run vk:doctor -- --push <user_id>   — отправить пробный пуш (трогает сеть)
  *
- * Выход: 0 — претензий нет; 1 — есть хотя бы одна причина, по которой игрок не войдёт
- * или не получит уведомление.
+ * Круговые подписи: initData (вход игрока), событие площадки (платёж), рекламный
+ * постбэк (награда). Все три идут через прод-код, поэтому расхождение видно здесь,
+ * а не в логах потерянных наград.
+ *
+ * Выход: 0 — претензий нет; 1 — есть хотя бы одна причина, по которой игрок не войдёт,
+ * не получит уведомление, оплату или награду за рекламу.
  */
 import { isVkConfigured, loadConfig } from '../src/config/env.js';
+import { parseVkAdPostback, toVkParams } from '../src/modules/ads/postback.js';
 import { verifyVkEvent, signVkEvent } from '../src/modules/payment/provider.vk.js';
 import {
   VkSignatureScheme,
@@ -165,6 +170,51 @@ if (config.vk.secretKey.length > 0) {
   else bad('vk:events круговая подпись не сошлась', `reason=${eventCheck.reason}`);
 } else {
   warn('событие площадки не проверяю', 'VK_SECRET_KEY пуст — см. выше');
+}
+
+// ─── 2в. Рекламный постбэк: круг по тому же пути, что пройдёт площадка ────────
+// `/callbacks/vk/ads` — единственное место, где просмотр ролика становится
+// наградой, и подпись у него схема mini_app (тот же прод-код, что у initData).
+// Круг повторяет ОБА транспорта маршрута (query для GET, тело для POST) и оба
+// шага после подписи: разбор `user_id`/`reward_id`. Расхождение здесь молча
+// стоит игрокам наград, а замечать его дешевле до ADS_POSTBACK_READY=true.
+if (config.vk.secretKey.length > 0) {
+  const postbackParams: VkParams = { user_id: 'doctor', reward_id: 'doctor-session' };
+  const postbackSign = signVkMiniApp(postbackParams, config.vk.appId, config.vk.secretKey);
+  const signed = { ...postbackParams, sign: postbackSign };
+  const transports: Array<[string, VkParams]> = [
+    ['query', parseVkParams(new URLSearchParams(signed).toString())],
+    ['body', toVkParams(signed)]
+  ];
+  for (const [name, inbound] of transports) {
+    const verified = verifyVkSignature(inbound, {
+      appId: config.vk.appId,
+      secretKey: config.vk.secretKey
+    });
+    const parsed = verified ? parseVkAdPostback(inbound) : null;
+    if (!verified) {
+      bad(`vk:ads постбэк (${name})`, 'круговая подпись mini_app не сошлась — награду не получит никто');
+    } else if (
+      !parsed ||
+      parsed.userId !== postbackParams.user_id ||
+      parsed.sessionId !== postbackParams.reward_id
+    ) {
+      bad(
+        `vk:ads постбэк (${name})`,
+        `user_id/reward_id потерялись в транспорте: ${JSON.stringify(parsed)}`
+      );
+    } else {
+      ok(`vk:ads постбэк (${name})`, `схема=${verified.scheme}`);
+    }
+  }
+  if (config.economy.limits.ads.enabled && !config.adsPostbackReady) {
+    warn(
+      'реклама включена без подтверждения постбэка',
+      'ADS_POSTBACK_READY=false: в production старт не состоится; до включения сверь в кабинете URL /callbacks/vk/ads и имена user_id/reward_id'
+    );
+  }
+} else {
+  warn('рекламный постбэк не проверяю', 'VK_SECRET_KEY пуст — см. выше');
 }
 
 // ─── 3. Транспорт уведомлений ────────────────────────────────────────────────
