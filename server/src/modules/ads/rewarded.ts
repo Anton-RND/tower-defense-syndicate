@@ -216,7 +216,10 @@ export function claimAdReward(
   return {
     account: {
       ...next,
-      ads: { day: counter.day, claimed: counter.claimed + 1, lastClaimAt: now, pending: null }
+      // `used` сохраняется разворотом, а не теряется: здесь создаётся новый объект
+      // ads, и без spread память об исполненных reward_id исчезла бы при каждой
+      // выдаче — ровно тот момент, когда она нужнее всего.
+      ads: { ...next.ads, day: counter.day, claimed: counter.claimed + 1, lastClaimAt: now, pending: null }
     },
     drafts,
     granted
@@ -227,4 +230,42 @@ export function claimAdReward(
 export function abandonAdSession(account: UserAccount, sessionId: string): UserAccount {
   if (account.ads.pending?.id !== sessionId) return account;
   return { ...account, ads: { ...account.ads, pending: null } };
+}
+
+/**
+ * Потолок памяти об исполненных `reward_id` площадки (AdState.used).
+ *
+ * 64 — это примерно десять суток при лимите 6 наград в день: ретраи рекламной сети
+ * приходят минутами и часами, а не неделями. Держать неограниченный массив в
+ * документе игрока ради гипотетического повтора через месяц дороже самой награды —
+ * размер документа здесь такой же ресурс, как энергия.
+ */
+export const AD_USED_IDS_CAP = 64;
+
+/**
+ * Память о выданной награде: записать `reward_id` площадки, по которому награда
+ * уже выдана.
+ *
+ * Вызывается ТОЛЬКО из того же редуктора, что и успешный `claimAdReward`: запись,
+ * пережившая неудачную выдачу, отбила бы потом честный показ игрока, а награда по
+ * нему не выдалась бы никогда.
+ *
+ * Пустой `rewardId` (площадка его не прислала) не запоминает НИЧЕГО. Выдумывать
+ * id, по которому сверялся бы реплей, значит создавать видимость защиты вместо
+ * честного «в этом режиме повтор отбивается только лимитами».
+ */
+export function noteAdRewardId(
+  account: UserAccount,
+  rewardId: string | null,
+  now: Date,
+  config: EconomyConfig
+): UserAccount {
+  if (!rewardId) return account;
+  const cutoff = now.getTime() - config.limits.ads.replayWindowMs;
+  const kept = account.ads.used.filter((used) => used.at.getTime() > cutoff && used.id !== rewardId);
+  kept.push({ id: rewardId, at: now });
+  return {
+    ...account,
+    ads: { ...account.ads, used: kept.slice(-AD_USED_IDS_CAP) }
+  };
 }

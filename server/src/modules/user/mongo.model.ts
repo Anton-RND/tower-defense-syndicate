@@ -57,11 +57,19 @@ interface AdPendingDoc {
   expiresAt: Date;
 }
 
+interface AdUsedDoc {
+  /** `reward_id` площадки, по которому награда уже выдана. */
+  rid: string;
+  at: Date;
+}
+
 interface AdsDoc {
   day: string;
   claimed: number;
   lastClaimAt: Date | null;
   pending: AdPendingDoc | null;
+  /** Исполненные `reward_id` (анти-реплей постбэка), от старых к новым. */
+  used: AdUsedDoc[];
 }
 
 /** Предмет инвентаря. `iid` — наш id, а не Mongo ObjectId: стор абстрактный (memory/mongo). */
@@ -318,12 +326,21 @@ const adPendingSchema = new Schema<AdPendingDoc>(
   { _id: false }
 );
 
+const adUsedSchema = new Schema<AdUsedDoc>(
+  {
+    rid: { type: String, required: true },
+    at: { type: Date, required: true }
+  },
+  { _id: false }
+);
+
 const adsSchema = new Schema<AdsDoc>(
   {
     day: { type: String, required: true },
     claimed: { type: Number, required: true, default: 0 },
     lastClaimAt: { type: Date, default: null },
-    pending: { type: adPendingSchema, default: null }
+    pending: { type: adPendingSchema, default: null },
+    used: { type: [adUsedSchema], default: [] }
   },
   { _id: false }
 );
@@ -520,7 +537,7 @@ export const userSchema = new Schema<UserDoc>(
       })
     },
     entitlements: { type: [entitlementSchema], default: [] },
-    ads: { type: adsSchema, required: true, default: () => ({ day: '1970-01-01', claimed: 0, lastClaimAt: null, pending: null }) },
+    ads: { type: adsSchema, required: true, default: () => ({ day: '1970-01-01', claimed: 0, lastClaimAt: null, pending: null, used: [] }) },
     orders: { type: [orderSchema], default: [] },
     clanId: { type: String, default: null },
     revision: { type: Number, required: true, default: 0 }
@@ -590,7 +607,10 @@ function adsFromDoc(doc: AdsDoc | undefined): AdState {
           createdAt: new Date(doc.pending.createdAt),
           expiresAt: new Date(doc.pending.expiresAt)
         }
-      : null
+      : null,
+    // Legacy-документы без памяти реплея читаются как «ничего не помним», а не как
+    // падение схемы: поле появилось позже Части 1.5, и живые игроки его не имеют.
+    used: (doc?.used ?? []).map((used) => ({ id: used.rid, at: new Date(used.at) }))
   };
 }
 
@@ -606,7 +626,8 @@ function adsToDoc(state: AdState): AdsDoc {
           createdAt: state.pending.createdAt,
           expiresAt: state.pending.expiresAt
         }
-      : null
+      : null,
+    used: state.used.map((used) => ({ rid: used.id, at: used.at }))
   };
 }
 

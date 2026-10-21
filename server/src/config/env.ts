@@ -183,6 +183,13 @@ const envSchema = z.object({
   ADS_DAILY_REWARDS: z.coerce.number().int().nonnegative().default(6),
   ADS_MIN_INTERVAL_SEC: z.coerce.number().int().nonnegative().default(120),
   ADS_SESSION_TTL_SEC: z.coerce.number().int().positive().default(180),
+  /**
+   * Глубина памяти об исполненных `reward_id` площадки, секунды (анти-реплей
+   * постбэка). Повторная доставка того же постбэка — норма рекламных сетей:
+   * без памяти она оплачивает следующий показ игрока. 24 часа покрывают и ретраи
+   * сети, и суточный лимит наград; старше — записи выбрасываются из документа.
+   */
+  ADS_REPLAY_WINDOW_SEC: z.coerce.number().int().positive().max(7 * 86_400).default(86_400),
   PURCHASE_DAILY_PER_SKU: z.coerce.number().int().nonnegative().default(0),
   MAX_ACTIVE_ENTITLEMENTS: z.coerce.number().int().nonnegative().default(50),
   REFUND_WINDOW_DAYS: z.coerce.number().int().positive().default(14),
@@ -387,6 +394,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
         adsDailyRewards: raw.ADS_DAILY_REWARDS,
         adsMinIntervalSec: raw.ADS_MIN_INTERVAL_SEC,
         adsSessionTtlSec: raw.ADS_SESSION_TTL_SEC,
+        adsReplayWindowSec: raw.ADS_REPLAY_WINDOW_SEC,
         purchaseDailyPerSku: raw.PURCHASE_DAILY_PER_SKU,
         maxActiveEntitlements: raw.MAX_ACTIVE_ENTITLEMENTS,
         refundWindowDays: raw.REFUND_WINDOW_DAYS,

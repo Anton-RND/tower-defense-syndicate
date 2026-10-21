@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { abandonAdSession, claimAdReward, openAdSession, type AdOffer } from '../src/modules/ads/rewarded.js';
+import {
+  abandonAdSession,
+  AD_USED_IDS_CAP,
+  claimAdReward,
+  noteAdRewardId,
+  openAdSession,
+  type AdOffer
+} from '../src/modules/ads/rewarded.js';
+import { isAdPostbackReplay } from '../src/modules/ads/postback.js';
 import { effectiveStorageCapacity } from '../src/modules/economy/entitlements.js';
 import { AppError, ErrorCodes } from '../src/lib/errors.js';
 import { MINUTE, T0, addMs, newAccount, testConfig, withAsterium } from './fixtures.js';
@@ -19,6 +27,14 @@ const strict = testConfig({
   ADS_DAILY_REWARDS: '2',
   ADS_MIN_INTERVAL_SEC: '300',
   ADS_SESSION_TTL_SEC: '600'
+}).economy;
+
+/** Узкое окно памяти реплея (2 минуты): проверяем, что документ не разрастается. */
+const narrow = testConfig({
+  ADS_ENABLED: 'true',
+  ADS_MIN_INTERVAL_SEC: '60',
+  ADS_SESSION_TTL_SEC: '120',
+  ADS_REPLAY_WINDOW_SEC: '120'
 }).economy;
 
 const energyOffer: AdOffer = { sku: 'ad_energy_20', label: '+20 энергии', reward: { kind: 'energy', units: 20 } };
@@ -189,5 +205,63 @@ describe('ads: антифрод-лимы', () => {
     const nextDay = addMs(T0, 24 * 60 * MINUTE);
     const third = flow(second.account, energyOffer, nextDay, nextDay, strict);
     expect(third.account.ads.claimed).toBe(1);
+  });
+});
+
+describe('ads: память исполненных reward_id (анти-реплей постбэка)', () => {
+  it('noteAdRewardId помнит id один раз: повторная запись не удваивает строку', () => {
+    const once = noteAdRewardId(withEnergy(50), 'vk-1', T0, rules);
+    const twice = noteAdRewardId(once, 'vk-1', addMs(T0, MINUTE), rules);
+    expect(twice.ads.used).toEqual([{ id: 'vk-1', at: addMs(T0, MINUTE) }]);
+  });
+
+  it('пустой rewardId не запоминается: сервер не выдумывает ключ сверки', () => {
+    const account = withEnergy(50);
+    // Площадка без reward_id — это режим, в котором память физически невозможна.
+    // Придумать id здесь значило бы сравнить повтор с собственным генератором.
+    expect(noteAdRewardId(account, null, T0, rules)).toBe(account);
+    expect(account.ads.used).toEqual([]);
+  });
+
+  it('записи старше окна выбрасываются: документ не разрастается до бесконечности', () => {
+    const old = noteAdRewardId(withEnergy(50), 'vk-old', T0, narrow);
+    const fresh = noteAdRewardId(old, 'vk-new', addMs(T0, 10 * MINUTE), narrow);
+    expect(fresh.ads.used.map((used) => used.id)).toEqual(['vk-new']);
+  });
+
+  it('потолок AD_USED_IDS_CAP режет самые старые записи', () => {
+    let account = withEnergy(50);
+    for (let i = 0; i < AD_USED_IDS_CAP + 10; i += 1) {
+      account = noteAdRewardId(account, `vk-${i}`, addMs(T0, i), rules);
+    }
+    expect(account.ads.used).toHaveLength(AD_USED_IDS_CAP);
+    expect(account.ads.used[0]?.id).toBe('vk-10');
+    expect(account.ads.used[AD_USED_IDS_CAP - 1]?.id).toBe(`vk-${AD_USED_IDS_CAP + 9}`);
+  });
+
+  it('claimAdReward сохраняет память: иначе она стиралась бы при каждой выдаче', () => {
+    const opened = openAdSession(withEnergy(50), energyOffer, T0, rules, idFactory);
+    const noted = noteAdRewardId(opened.account, 'vk-earlier', addMs(T0, -MINUTE), rules);
+    const claimed = claimAdReward(noted, opened.session.id, energyOffer, T0, rules);
+    // Возврат из claimAdReward собирает новый объект ads. Без переноса `used`
+    // память жила бы ровно до первой следующей награды — то есть всегда пуста.
+    expect(claimed.account.ads.used.map((used) => used.id)).toContain('vk-earlier');
+  });
+});
+
+describe('ads/postback: isAdPostbackReplay', () => {
+  const remembered = { ...withEnergy(50), ads: { ...withEnergy(50).ads, used: [{ id: 'vk-1', at: T0 }] } };
+
+  it('узнаёт исполненный id в пределах окна', () => {
+    expect(isAdPostbackReplay(remembered, 'vk-1', T0, 120_000)).toBe(true);
+  });
+
+  it('не узнаёт id за пределами окна: повтор через месяц — это уже другой показ', () => {
+    expect(isAdPostbackReplay(remembered, 'vk-1', addMs(T0, 10 * MINUTE), 120_000)).toBe(false);
+  });
+
+  it('чужой id и отсутствующий id — не реплей', () => {
+    expect(isAdPostbackReplay(remembered, 'vk-2', T0, 120_000)).toBe(false);
+    expect(isAdPostbackReplay(remembered, null, T0, 120_000)).toBe(false);
   });
 });

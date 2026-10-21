@@ -245,6 +245,103 @@ describe('callbacks/vk/ads: награда выходит только под в
   });
 });
 
+describe('callbacks/vk/ads: анти-реплей — память исполненных reward_id', () => {
+  it('повтор того же reward_id не кормит следующий слот и не сжигает его', async () => {
+    let clock = new Date('2026-10-20T00:00:00.000Z');
+    const logs = recordingLogger();
+    const { app, ctx } = await openStand({}, { now: () => clock, logger: logs.logger });
+    const userId = await createPlayer(ctx, '808');
+    await openSession(ctx, userId, 'ad_asterium_10');
+
+    // Площадка прислала СВОЙ id (наш мост ей ничего не передаёт), награда выдана
+    // по владельцу. Именно этот id и обязан вспомниться при повторной доставке.
+    expect((await get(app, signedQuery({ user_id: '808', reward_id: 'vk-reward-dup' }))).statusCode).toBe(200);
+    const first = await ctx.users.findById(userId);
+    expect(first?.ads.claimed).toBe(1);
+    expect(first?.ads.used.map((used) => used.id)).toEqual(['vk-reward-dup']);
+
+    // Игрок посмотрел второе видео: слот открыт, и именно в него раньше
+    // приземлялся сетевой ретрай первой доставки, оплачивая чужой показ.
+    clock = new Date(clock.getTime() + 3 * 60_000);
+    await openSession(ctx, userId, 'ad_asterium_10');
+
+    expect((await get(app, signedQuery({ user_id: '808', reward_id: 'vk-reward-dup' }))).statusCode).toBe(200);
+    const replay = await ctx.users.findById(userId);
+    expect(replay?.materials.asterium.earned).toBe(10);
+    expect(replay?.ads.claimed).toBe(1);
+    // Слот НЕ сожжён: настоящее подтверждение второго показа ещё впереди.
+    expect(replay?.ads.pending).not.toBeNull();
+    expect(lastEntry(logs.entries, 'ad_postback_replay')?.meta.rewardId).toBe('vk-reward-dup');
+
+    // ...и оно проходит. Память отбивает повтор, а не превращает игрока в
+    // заложника одного id площадки.
+    expect((await get(app, signedQuery({ user_id: '808', reward_id: 'vk-reward-second' }))).statusCode).toBe(200);
+    const second = await ctx.users.findById(userId);
+    expect(second?.ads.claimed).toBe(2);
+    expect(second?.ads.pending).toBeNull();
+    expect(second?.ads.used.map((used) => used.id)).toEqual(['vk-reward-dup', 'vk-reward-second']);
+  });
+
+  it('память привязана к игроку: тот же reward_id у другого награду не отбивает', async () => {
+    const { app, ctx } = await openStand({}, { now: () => new Date('2026-10-20T00:00:00.000Z') });
+    const alice = await createPlayer(ctx, '901');
+    const bob = await createPlayer(ctx, '902');
+    await openSession(ctx, alice, 'ad_asterium_10');
+    await openSession(ctx, bob, 'ad_asterium_10');
+
+    await get(app, signedQuery({ user_id: '901', reward_id: 'shared-id' }));
+    expect((await ctx.users.findById(alice))?.ads.claimed).toBe(1);
+
+    // Площадка не обязана делать id уникальными между нашими игроками, и сводить
+    // их глобально — значит даром отрезать награду второму за чужой показ.
+    const response = await get(app, signedQuery({ user_id: '902', reward_id: 'shared-id' }));
+    expect(response.statusCode).toBe(200);
+    const after = await ctx.users.findById(bob);
+    expect(after?.ads.claimed).toBe(1);
+    expect(after?.materials.asterium.earned).toBe(10);
+  });
+
+  it('reward_id старше ADS_REPLAY_WINDOW_SEC забывается: проверка и документ', async () => {
+    let clock = new Date('2026-10-20T00:00:00.000Z');
+    const { app, ctx } = await openStand({ ADS_REPLAY_WINDOW_SEC: '120' }, { now: () => clock });
+    const userId = await createPlayer(ctx, '903');
+    await openSession(ctx, userId, 'ad_asterium_10');
+    await get(app, signedQuery({ user_id: '903', reward_id: 'vk-old' }));
+    expect((await ctx.users.findById(userId))?.ads.used).toHaveLength(1);
+
+    // Десять минут спустя то же самое подтверждение — это уже другой показ:
+    // окно памяти его не видит, и награда выдаётся честно.
+    clock = new Date(clock.getTime() + 10 * 60_000);
+    await openSession(ctx, userId, 'ad_asterium_10');
+    expect((await get(app, signedQuery({ user_id: '903', reward_id: 'vk-old' }))).statusCode).toBe(200);
+    const after = await ctx.users.findById(userId);
+    expect(after?.ads.claimed).toBe(2);
+    // Запись не кочует вечно: старая выпала за окно, осталась ровно одна, свежая.
+    expect(after?.ads.used).toHaveLength(1);
+    expect(after?.ads.used[0]?.at.getTime()).toBe(clock.getTime());
+  });
+
+  it('без reward_id помнить нечего — риск зафиксирован тестом, а не надеждой', async () => {
+    let clock = new Date('2026-10-20T00:00:00.000Z');
+    const { app, ctx } = await openStand({}, { now: () => clock });
+    const userId = await createPlayer(ctx, '904');
+    await openSession(ctx, userId, 'ad_asterium_10');
+    await get(app, signedQuery({ user_id: '904' }));
+    // Выдумывать ключ сверки сервер не станет: память остаётся пустой.
+    expect((await ctx.users.findById(userId))?.ads.used).toEqual([]);
+
+    clock = new Date(clock.getTime() + 3 * 60_000);
+    await openSession(ctx, userId, 'ad_asterium_10');
+    await get(app, signedQuery({ user_id: '904' }));
+    const after = await ctx.users.findById(userId);
+    // Если живой постбэк окажется без reward_id, единственная защита повтора —
+    // лимиты (ADS_DAILY_REWARDS, ADS_MIN_INTERVAL_SEC, TTL сессии). Именно это и
+    // держит ADS_POSTBACK_READY=false до перехвата настоящего запроса.
+    expect(after?.ads.claimed).toBe(2);
+    expect(after?.materials.asterium.earned).toBe(20);
+  });
+});
+
 describe('callbacks/vk/ads: методы и бюджет', () => {
   it('POST JSON-формом принимается — тот же договор, что и GET-query', async () => {
     const { app, ctx } = await openStand();

@@ -216,7 +216,24 @@ if (config.vk.secretKey.length > 0) {
   if (config.economy.limits.ads.enabled && !config.adsPostbackReady) {
     warn(
       'реклама включена без подтверждения постбэка',
-      'ADS_POSTBACK_READY=false: в production старт не состоится; до включения сверь в кабинете URL /callbacks/vk/ads и имена user_id/reward_id'
+      'ADS_POSTBACK_READY=false: в production старт не состоится; до включения сверь в кабинете URL /callbacks/vk/ads, имена user_id/reward_id и САМО наличие reward_id — от него зависит, работает ли память реплея'
+    );
+  }
+
+  // Память исполненных reward_id — единственная защита от повторной доставки,
+  // доступная до первого живого постбэка. Доктор показывает её глубину: окно
+  // в пару минут превратило бы защиту в декорацию, и узнать это дешевле здесь,
+  // чем по пропаже наград в проде.
+  const replayWindowSec = config.economy.limits.ads.replayWindowMs / 1000;
+  if (replayWindowSec >= 3600) {
+    ok(
+      'vk:ads память реплея',
+      `ADS_REPLAY_WINDOW_SEC=${replayWindowSec}: исполненные reward_id помнятся ${Math.round(replayWindowSec / 3600)} ч`
+    );
+  } else {
+    warn(
+      'vk:ads память реплея мелкая',
+      `окно ${replayWindowSec} с: повтор, прилетевший позже, накормит следующий слот игрока`
     );
   }
 } else {

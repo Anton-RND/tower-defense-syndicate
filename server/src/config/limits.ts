@@ -28,6 +28,16 @@ export interface AdLimits {
   sessionTtlMs: number;
   /** Сколько сессий может висеть одновременно (держим 1 — дешевле антифрод). */
   pendingSessions: number;
+  /**
+   * Как долго помним исполненные `reward_id` площадки, мс (анти-реплей постбэка).
+   *
+   * Повторная доставка того же постбэка — штатное поведение рекламных сетей, а
+   * слот показа после выдачи пуст: без памяти повтор оплачивал бы СЛЕДУЮЩИЙ показ
+   * игрока. Записи старше этого окна выбрасываются из документа, поэтому окно
+   * служит и потолком размера, и глубиной защиты — реплей спустя месяц отбивается
+   * уже не им, а TTL сессии и суточными лимитами.
+   */
+  replayWindowMs: number;
 }
 
 /** Внутриигровые покупки (Шаг 2: VK Pay / витрина; Часть 1: VKWebAppShowOrderBox). */
@@ -115,7 +125,14 @@ export interface LimitsConfig {
 
 export const DEFAULT_LIMITS: LimitsConfig = {
   assist: { dailyLimit: 10, percent: 25, helpersHistory: 100 },
-  ads: { enabled: false, dailyRewards: 6, minIntervalMs: 120_000, sessionTtlMs: 180_000, pendingSessions: 1 },
+  ads: {
+    enabled: false,
+    dailyRewards: 6,
+    minIntervalMs: 120_000,
+    sessionTtlMs: 180_000,
+    pendingSessions: 1,
+    replayWindowMs: 24 * 3_600_000
+  },
   purchases: {
     enabled: false,
     dailyPerSku: 0,
@@ -138,6 +155,7 @@ export function buildLimits(input: {
   adsDailyRewards: number;
   adsMinIntervalSec: number;
   adsSessionTtlSec: number;
+  adsReplayWindowSec: number;
   paymentsEnabled: boolean;
   purchaseDailyPerSku: number;
   maxActiveEntitlements: number;
@@ -163,7 +181,8 @@ export function buildLimits(input: {
       dailyRewards: input.adsDailyRewards,
       minIntervalMs: input.adsMinIntervalSec * 1000,
       sessionTtlMs: input.adsSessionTtlSec * 1000,
-      pendingSessions: DEFAULT_LIMITS.ads.pendingSessions
+      pendingSessions: DEFAULT_LIMITS.ads.pendingSessions,
+      replayWindowMs: input.adsReplayWindowSec * 1000
     },
     purchases: {
       enabled: input.paymentsEnabled,

@@ -253,6 +253,20 @@ export interface Entitlement {
   orderId: string | null;
 }
 
+/**
+ * Исполненный постбэк рекламы: один `reward_id` площадки выдаёт награду ровно
+ * один раз, сколько бы раз площадка его ни доставила.
+ *
+ * Храним именно ПЛОЩАДСКОЙ id, а не наш id сессии: наш `pending.id` после выдачи
+ * стирается вместе со слотом, и сравнивать с ним повторный постбэк было бы нечем.
+ */
+export interface AdUsedReward {
+  /** `reward_id` из подписанного постбэка (идентификатор площадки, не `pending.id`). */
+  id: string;
+  /** Момент выдачи награды по этому id; старше `ADS_REPLAY_WINDOW_SEC` — не помним. */
+  at: Date;
+}
+
 /** Состояние rewarded-рекламы: суточный счётчик + одна «висящая» сессия показа. */
 export interface AdState {
   /** Ключ суток UTC (YYYY-MM-DD) — как в assist. */
@@ -268,6 +282,18 @@ export interface AdState {
     createdAt: Date;
     expiresAt: Date;
   } | null;
+  /**
+   * Уже исполненные `reward_id` площадки, от старых к новым (анти-реплей постбэка).
+   *
+   * Повторная доставка того же постбэка — штатное поведение рекламных сетей, а
+   * слот показа после выдачи пуст, поэтому без этой памяти повтор попадал бы в
+   * СЛЕДУЮЩИЙ показ игрока и оплачивал его (см. modules/ads/postback.ts).
+   *
+   * Честное ограничение: если площадка `reward_id` не шлёт вовсе, помнить нечего
+   * и реплей отбивается только лимитами. Поле тогда остаётся пустым — это
+   * наблюдаемое свойство живого кабинета, а не опция.
+   */
+  used: AdUsedReward[];
 }
 
 /**
@@ -576,7 +602,10 @@ export function cloneAccount(account: UserAccount): UserAccount {
     ads: {
       ...account.ads,
       lastClaimAt: account.ads.lastClaimAt ? new Date(account.ads.lastClaimAt) : null,
-      pending: account.ads.pending ? { ...account.ads.pending } : null
+      pending: account.ads.pending ? { ...account.ads.pending } : null,
+      // Копия массива с датами-копиями: cloneAccount вызывают на каждом transact, и
+      // общий ссылочный массив позволил бы одному редуктору испортить чужой.
+      used: account.ads.used.map((used) => ({ id: used.id, at: new Date(used.at) }))
     },
     // Даты заказов копируются как Date: cloneAccount вызывается на каждом transact,
     // и «строка вместо Date» в редукторе сломала бы сравнения expiresAt.getTime().
@@ -636,7 +665,7 @@ export function createAccount(
     // из рекламы/событий, сырьё (хрониум, вольфрам, станиум) — из цеха переработки и магазина.
     materials: emptyMaterials(),
     entitlements: [],
-    ads: { day: iso.slice(0, 10), claimed: 0, lastClaimAt: null, pending: null },
+    ads: { day: iso.slice(0, 10), claimed: 0, lastClaimAt: null, pending: null, used: [] },
     orders: [],
     // Новичок без клана: основание клана — платющее действие, а не состояние по умолчанию.
     clanId: null,

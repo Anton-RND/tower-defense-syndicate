@@ -80,7 +80,7 @@ describe('монетизация сквозь стор и DTO', () => {
           orderId: 'order-1'
         }
       ],
-      ads: { day: T0.toISOString().slice(0, 10), claimed: 2, lastClaimAt: T0, pending: null }
+      ads: { day: T0.toISOString().slice(0, 10), claimed: 2, lastClaimAt: T0, pending: null, used: [] }
     };
 
     const view = describeEconomy(account, T0, config);

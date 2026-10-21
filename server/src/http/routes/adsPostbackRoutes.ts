@@ -2,8 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { AppError, ErrorCodes, validationError } from '../../lib/errors.js';
 import { getAdOffer } from '../../config/ads.js';
-import { parseVkAdPostback, resolveAdPostbackSession, toVkParams } from '../../modules/ads/postback.js';
-import { claimAdReward } from '../../modules/ads/rewarded.js';
+import { parseVkAdPostback, isAdPostbackReplay, resolveAdPostbackSession, toVkParams } from '../../modules/ads/postback.js';
+import { claimAdReward, noteAdRewardId } from '../../modules/ads/rewarded.js';
 import { verifyVkSignature } from '../../modules/auth/vk.signature.js';
 import type { AppContext } from '../context.js';
 import { accountAction, bodyOf } from '../helpers.js';
@@ -68,6 +68,20 @@ export function registerAdsPostbackRoutes(app: FastifyInstance, ctx: AppContext)
       return reply.type('text/plain; charset=utf-8').send('ok');
     }
 
+    // РЕПЛЕЙ РАНЬШЕ РЕЗОЛВЕРА. Повторная доставка того же постбэка не обязана ни
+    // кормить следующий слот игрока, ни сжигать его: слот остаётся живым для
+    // настоящего подтверждения этого показа. Память id молчит, когда площадка его
+    // не шлёт, — тогда выдача идёт дальше и защищается только лимитами.
+    if (isAdPostbackReplay(account0, rewardId, now, ctx.config.economy.limits.ads.replayWindowMs)) {
+      ctx.logger.warn('ad_postback_replay', {
+        requestId: request.id,
+        userId,
+        rewardId,
+        pendingId: account0.ads.pending?.id ?? null
+      });
+      return reply.type('text/plain; charset=utf-8').send('ok');
+    }
+
     const session = resolveAdPostbackSession(account0, parsed);
     const offer = session ? getAdOffer(session.pending.sku) : undefined;
     if (!session || !offer) {
@@ -88,7 +102,13 @@ export function registerAdsPostbackRoutes(app: FastifyInstance, ctx: AppContext)
     try {
       const { account, meta } = await accountAction(ctx, account0.id, now, (synced) => {
         const claimed = claimAdReward(synced, sessionId, offer, now, ctx.config.economy);
-        return { account: claimed.account, drafts: claimed.drafts, meta: claimed };
+        // Память об исполненном id пишется в ТОМ ЖЕ редукторе, что и выдача: запись
+        // при неуспешной выдаче отбила бы игроку его следующий честный показ.
+        return {
+          account: noteAdRewardId(claimed.account, rewardId, now, ctx.config.economy),
+          drafts: claimed.drafts,
+          meta: claimed
+        };
       });
       ctx.logger.info('ad_postback_claimed', {
         requestId: request.id,
