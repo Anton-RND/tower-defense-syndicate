@@ -161,7 +161,7 @@ const envSchema = z.object({
 });
 
 /** Значение по умолчанию для разработки, когда JWT_SECRET не задан. */
-export const DEV_JWT_SECRET = 'dev-on…e-me';
+export const DEV_JWT_SECRET = 'dev-only-change-me';
 
 export class ConfigError extends Error {
   constructor(message: string, readonly issues: string[] = []) {
