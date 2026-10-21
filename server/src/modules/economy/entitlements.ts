@@ -1,5 +1,5 @@
 import { STORAGE_IDS, type StorageId } from '../../config/storage.js';
-import { storageBonus } from '../../config/structures.js';
+import { miningBonus, storageBonus } from '../../config/structures.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
 import {
   emptyStorages,
@@ -147,8 +147,13 @@ export function effectiveMiningRates(
   effects = resolveEntitlements(account, now)
 ): StoragePools {
   const rates = emptyStorages();
+  // Граница та же, что у ёмкостей в `storageCapacities`: множитель привилегии
+  // касается БАЗОВОЙ ставки, а буры добавляются сверх неё. Иначе купленный
+  // «Добыча ×2» молча удваивал бы доходность станков, построенных однажды, и
+  // долгосрочное вложение в завод зависело бы от срока акции.
+  const bonus = miningBonus(account.structures);
   for (const resource of STORAGE_IDS) {
-    rates[resource] = (account.miningRates[resource] ?? 0) * effects.mineMultiplier;
+    rates[resource] = (account.miningRates[resource] ?? 0) * effects.mineMultiplier + (bonus[resource] ?? 0);
   }
   return rates;
 }

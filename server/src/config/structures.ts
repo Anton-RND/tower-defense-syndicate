@@ -27,6 +27,8 @@ import type { MaterialCost } from './workshop.js';
  */
 
 export const STRUCTURE_IDS = [
+  'bore_ore_mk1',
+  'bore_ore_mk2',
   'reactor_plasma_mk1',
   'reactor_plasma_mk2',
   'reactor_plasma_mk3',
@@ -59,6 +61,9 @@ export function isStructureId(value: string): value is StructureId {
  * Порядок физически осмыслен, а не назначен произвольно:
  *  - `cooling` держится выше всего, что греется: отключение кулера глушит реактор,
  *    а потеря реактора хуже потери цикла охлаждения (реактор нечем заменить);
+ *  - `mining` ниже генерации и выше химии: остановка бура бьёт по будущему
+ *    запасу руды, но не запускает каскад — азот и дейтерий, в отличие от руды,
+ *    являются условием работы самих реакторов;
  *  - `chemistry` ниже обороны, но выше майнинга: азот и дейтерий — хладагент и
  *    топливо, их остановка каскадом валит и реакторы, и тяжи;
  *  - `compute` отключается ПЕРВЫМ из производящих ценность: SEC — роскошь, и игрок
@@ -68,6 +73,7 @@ export const POWER_PRIORITY = {
   defense: 5,
   cooling: 10,
   generation: 20,
+  mining: 25,
   chemistry: 30,
   storage: 40,
   compute: 50
@@ -83,6 +89,39 @@ export interface FuelSpec {
 /** Продукция: что наливается в накопитель. Ед./час при полной нагрузке. */
 export interface OutputSpec {
   resource: StorageId;
+  perHour: number;
+}
+
+/**
+ * Прирост СТАВКИ ДОБЫЧИ, ед./час на каждый ресурс из списка.
+ *
+ * ПОЧЕМУ ОТДЕЛЬНОЕ ПОЛЕ, А НЕ `output`
+ * ────────────────────────────────────
+ * Соблазн описать карьер как `output: { resource: 'ferrum', perHour: 40 }` велик:
+ * движок промышленности (`industry.ts`) уже умеет лить в накопители, и правка
+ * свелась бы к одной строке конфига. Но это соврёт витрине, и враньё будет тихим:
+ *
+ *   1. Таблица «Экономика» строится на `effectiveMiningRates` (entitlements.ts) и
+ *      показывает игроку ставку и прогноз «склад заполнится через 19ч 44м». Руда,
+ *      приходящая отдельным промышленным тиком, в эту ставку не попадёт: игрок
+ *      увидит 50/ч, а набежит 90/ч. Расхождение витрины и касы — это не косметика,
+ *      а тикет в поддержку (см. шапку `describeClanMembership` в play.html).
+ *   2. Ёмкость и переполнение считаются в `mining.ts` по той же ставке. Два
+ *      независимых потока в один накопитель дадут два разных ответа на вопрос
+ *      «когда склад встал», и момент для push-уведомления станет непредсказуем.
+ *
+ * Поэтому добыча — часть майнинга, симметрично тому, как `storage` уже является
+ * частью ёмкости: силос не льёт руду через промышленность, он расширяет накопитель
+ * через `storageBonus`. Бур делает то же самое для ставки, через `miningBonus`.
+ *
+ * В веере сети бур при этом НЕ участвует намеренно (`power: 0`, `heat: 0`): порядок
+ * экономического тика — привилегии → майнинг → промышленность → энергия, и на
+ * момент майнинга сетка ещё не посчитана. Завязать ставку на онлайн бура означало
+ * бы перевернуть этот порядок, а он обоснован (см. шапку `industry.ts`: ночная
+ * добыча должна стать доступна реактору в том же такте).
+ */
+export interface MineSpec {
+  resources: readonly StorageId[];
   perHour: number;
 }
 
@@ -121,6 +160,7 @@ export interface StructureDef {
   output?: OutputSpec;
   coinOutput?: CoinOutputSpec;
   storage?: StorageSpec;
+  mine?: MineSpec;
   priority: PowerPriority;
   /**
    * Требуемые сооружения-предшественники (код → количество). Проверяется при старте
@@ -244,6 +284,42 @@ const ASIC: Readonly<Record<1 | 2 | 3, { hash: number; power: number; heat: numb
 };
 
 export const STRUCTURES: readonly StructureDef[] = [
+  // ─── Добыча: рудные буры ────────────────────────────────────────────────────
+  // Единственный механизм роста добычи, не связанный с деньгами. До его появления
+  // ставка руды была константой из env (50/30/8/2) и увеличивалась ровно одним
+  // способом — множителем `mine_x2_24h` за 99 ₽ (config/shop.ts). Копирайт каталога
+  // при этом обещал «буры роют железо, кремний, уран и плазму» (VK_CATALOG.md), то
+  // есть игра продавала то, чего в реестре не было.
+  //
+  // Ряд T1 → T2 держится на том же принципе, что и остальной реестр: прирост
+  // ставки растёт быстрее цены (×2,75 при ×2,5 в железе), но требует предшественника,
+  // поэтому купить себе весь доход с налёту не выйдет.
+  {
+    id: 'bore_ore_mk1',
+    name: 'Рудный бур Mk.I',
+    tier: 1,
+    cost: { ferrum: 250, silicium: 120, black_metal: 60 },
+    buildMs: 15 * 60_000,
+    maxPerBase: 8,
+    power: 0,
+    heat: 0,
+    mine: { resources: ['ferrum', 'silicium'], perHour: 40 },
+    priority: POWER_PRIORITY.mining
+  },
+  {
+    id: 'bore_ore_mk2',
+    name: 'Рудный бур Mk.II',
+    tier: 2,
+    cost: { ferrum: 1500, silicium: 800, black_metal: 300, colored_metal: 60, boards: 10 },
+    buildMs: 90 * 60_000,
+    maxPerBase: 8,
+    power: 0,
+    heat: 0,
+    mine: { resources: ['ferrum', 'silicium', 'uranium'], perHour: 110 },
+    priority: POWER_PRIORITY.mining,
+    requires: { bore_ore_mk1: 2 }
+  },
+
   // ─── Энергетика: плазменные конвертеры ──────────────────────────────────────
   // КПВ (кВт на единицу плазмы) растёт с тиром слабее масштаба: 15 → 16,8 → 18,2.
   // Эффективность — не право тира-3 на бесконечное топливо, иначе реактор обесценил
@@ -507,6 +583,23 @@ export function structuresTotal(counts: Partial<Record<StructureId, number>>): n
   let total = 0;
   for (const id of STRUCTURE_IDS) total += counts[id] ?? 0;
   return total;
+}
+
+/**
+ * Прирост ставки добычи от построек, ед./час на каждый ресурс.
+ *
+ * Симметрична `storageBonus`: силос расширяет ёмкость накопителя, бур расширяет
+ * ставку. Оба живут в майнинге, а не в промышленности, — поэтому витрина «Экономики»
+ * и касса тика дают один ответ на вопрос «сколько накопится к утру».
+ */
+export function miningBonus(counts: Partial<Record<StructureId, number>>): Record<StorageId, number> {
+  const bonus: Record<StorageId, number> = { ferrum: 0, silicium: 0, uranium: 0, plasma: 0, deuterium: 0, nitrogen: 0 };
+  for (const def of STRUCTURES) {
+    const n = counts[def.id] ?? 0;
+    if (n <= 0 || !def.mine) continue;
+    for (const resource of def.mine.resources) bonus[resource] += def.mine.perHour * n;
+  }
+  return bonus;
 }
 
 /** Прирост ёмкости накопителя от построек, ед. на каждый ресурс. */

@@ -178,6 +178,21 @@ function esc(value) {
   return String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
 }
 
+/**
+ * Подсветка слова в таблице: зелёное или красное вместо целой строки.
+ *
+ * ОБЪЯВЛЕНЫ ГЛОБАЛЬНО, А НЕ ВНУТРИ ОДНОГО РЕНДЕРА. До этого `ok`/`bad` родились
+ * внутри renderPower и работали ровно в одной панели, а клан и рынок вызывали их
+ * у себя и получали ReferenceError: bad is not defined. Коварство симптома было в
+ * том, что снимок применяется из api() → adoptView() → renderAll(), поэтому падение
+ * прилипало к ЗАПРОСУ, а не к панели-виновнику: игрок читал «рынок: bad is not
+ * defined», тогда как рынок был ни при чём, а настоящая жертва (клан) молчала с
+ * пустой витриной. Общий слой разметки — сосед `esc`, а не тело конкретной функции.
+ */
+const ok = (v) => '<span class="ok">' + v + '</span>';
+const bad = (v) => '<span class="err">' + v + '</span>';
+
+
 function clock() {
   return new Date().toLocaleTimeString('ru-RU', { hour12: false });
 }
@@ -2290,8 +2305,8 @@ function renderPower() {
   const eco = S.snap.economy;
   const p = eco.power;
 
-  const ok = (v) => '<span class="ok">' + v + '</span>';
-  const bad = (v) => '<span class="err">' + v + '</span>';
+  // ok/bad подняты в общий слой разметки (см. начало скрипта): здесь они больше не
+  // объявляются, иначе локальная константа затмила бы глобальную и вернула бы баг.
   const WHY = { fuel: 'нет топлива', power: 'нет мощности', cooling: 'нет азота', output: 'некуда лить' };
 
   tag.innerHTML = p.isBalanced ? ok('баланс') : bad('дефицит');
@@ -2306,12 +2321,22 @@ function renderPower() {
   // не ошибка, а «строить» с серым прайсом было бы обманом — игрок нажал бы и получил
   // INSUFFICIENT_FUNDS от сервера, который всегда вправе отказать.
   const secWallet = eco.resources.secSpendable;
+  // Короткие имена руды для колонки добычи берутся из того же ответа, что и таблица
+  // складов: фронт не переводит `ferrum` по собственной таблице — тот же запрет,
+  // что на цены сооружений и на «нужно ещё N астерия» в панели клана.
+  const oreName = {};
+  (eco.warehouses || []).forEach((w) => { oreName[w.resource] = w.name; });
+  const mineCell = (s) => s.mine
+    ? '<td class="num ok">+' + fmtNum(s.mine.perHour) + '/ч ' +
+      s.mine.resources.map((r) => esc(oreName[r] || r)).join('·') + '</td>'
+    : '<td class="num muted">—</td>';
   const buildings = (eco.structures || []).map((s) =>
     '<tr><td>' + esc(s.name) + ' <span class="muted">T' + s.tier + '</span>' +
     (s.unlocked ? '' : ' <span class="err" title="не выполнен предшественник">🔒</span>') + '</td>' +
     '<td class="num">' + s.count + '</td>' +
     '<td class="num muted">' + (s.power >= 0 ? '+' : '') + fmtNum(s.power) + '</td>' +
     '<td class="num muted">' + fmtNum(s.heat) + '</td>' +
+    mineCell(s) +
     '<td class="num' + (s.secCost > secWallet ? ' err' : '') + '" title="цена следующего экземпляра">' +
     (s.secCost > 0 ? fmtNum(s.secCost) : '—') + '</td>' +
     '<td class="num"><button' + (s.unlocked ? '' : ' disabled') +
@@ -2329,7 +2354,7 @@ function renderPower() {
     (nodes
       ? '<table><tr><th>узел</th><th class="num">онлайн</th><th class="num">причина</th></tr>' + nodes + '</table>'
       : '<div class="muted" style="margin:6px 0">сеть пуста: постройте плазменный конвертер</div>') +
-    '<table><tr><th>сооружение</th><th class="num">шт</th><th class="num">кВт</th><th class="num">тепло</th><th class="num">SEC</th><th class="num"></th></tr>' +
+    '<table><tr><th>сооружение</th><th class="num">шт</th><th class="num">кВт</th><th class="num">тепло</th><th class="num">добыча</th><th class="num">SEC</th><th class="num"></th></tr>' +
     buildings + '</table>' +
     '<p class="hint">Веер бинарный: стойка либо стоит, либо глуха — никакого «работает на 73%». ' +
     'Глухая башня остаётся на карте и принимает урон, но не стреляет; тяжёлая техника ' +

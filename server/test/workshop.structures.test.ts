@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BLUEPRINTS, MAX_INVENTORY_ITEMS, getBlueprint, isMaterialId, materialEntries } from '../src/config/workshop.js';
-import { MAX_STRUCTURE_TOTAL, STRUCTURES, getStructure, structureSecCost, type StructureId } from '../src/config/structures.js';
+import { MAX_STRUCTURE_TOTAL, STRUCTURES, getStructure, miningBonus, structureSecCost, type StructureId } from '../src/config/structures.js';
 import { unitPowerProfile } from '../src/modules/economy/power.js';
 import { AppError, ErrorCodes } from '../src/lib/errors.js';
 import { settleBuilds, startBuild } from '../src/modules/workshop/craft.js';
@@ -330,5 +330,52 @@ describe('workshop/structures: SEC — деньги, а не запас', () => 
 
   it('цена Mk.III выше Mk.II: монета покупает тир, а не только объём', () => {
     expect(structureSecCost(getStructure(MK3)!, 0)).toBeGreaterThan(structureSecCost(getStructure(MK2)!, 0));
+  });
+});
+
+describe('workshop/structures: добыча руды постройками', () => {
+  const BORE = 'bore_ore_mk1';
+  const BORE2 = 'bore_ore_mk2';
+
+  it('в реестре есть добывающее сооружение БЕЗ предпосылок', () => {
+    // Страж ямы, в которую нельзя вернуться незаметно. Пока ставка добычи была
+    // константой из env, единственный её рост стоил 99 ₽ (`mine_x2_24h`), а
+    // копирайт каталога уже обещал «буры роют железо, кремний, уран и плазму».
+    // Проверка держит именно корень дерева: тир-2 без тира-1 новичку не поможет.
+    const roots = STRUCTURES.filter((def) => def.mine && (!def.requires || Object.keys(def.requires).length === 0));
+    expect(roots.length, 'новичку нечем поднять добычу, кроме платного буста').toBeGreaterThan(0);
+  });
+
+  it('miningBonus аддитивен по числу экземпляров и молчит про чужие ресурсы', () => {
+    const def = getStructure(BORE)!;
+    if (!def.mine) throw new Error('фикстура: у бура Mk.I пропало поле mine');
+    const per = def.mine.perHour;
+    const bonus = miningBonus({ [BORE]: 3 });
+    for (const resource of def.mine.resources) expect(bonus[resource]).toBe(3 * per);
+    for (const resource of ['uranium', 'plasma', 'deuterium', 'nitrogen'] as const) {
+      if (def.mine.resources.includes(resource)) continue;
+      expect(bonus[resource]).toBe(0);
+    }
+    // Пустая база — нулевой бонус: иначе «построил 0 буров» дало бы прирост.
+    expect(miningBonus({})['ferrum']).toBe(0);
+  });
+
+  it('бур Mk.II без двух Mk.I не строится, и отказ наступает до списания материалов', () => {
+    const account = funded();
+    const before = { ...account.resources };
+    expect(errorCode(() => startBuild(account, BORE2, T0, idFactory))).toBe(ErrorCodes.STRUCTURE_REQUIRES);
+    expect(account.resources).toEqual(before);
+    const withTwo = withStructures(account, { [BORE]: 2 });
+    expect(startBuild(withTwo, BORE2, T0, idFactory).structure?.id).toBe(BORE2);
+  });
+
+  it('добыча бура живёт в майнинге, а не в промышленности', () => {
+    // Граница, обоснованная в `MineSpec`: руда, приходящая промышленным тиком,
+    // не попала бы в ставку `effectiveMiningRates`, и витрина «Экономики» показала
+    // бы одну цифру, а набежала бы другая.
+    const def = getStructure(BORE)!;
+    expect(def.output, 'бур не должен дублировать майнинг через промышленность').toBeUndefined();
+    expect(def.power).toBe(0);
+    expect(def.heat).toBe(0);
   });
 });

@@ -440,3 +440,77 @@ describe('роли материалов: вольфрам — сырьё тяж�
   });
 });
 
+describe('speedup: сооружение — счётчик, а не предмет', () => {
+  const REACTOR = 'reactor_plasma_mk1';
+  const BORE = 'bore_ore_mk1';
+
+  /**
+   * Регресс найденной ямы. Проверка «после ускорения в инвентаре ровно один предмет»
+   * была сквозной, а сооружение не приезжает в инвентарь BY CONSTRUCTION (`settleBuilds`
+   * для него возвращает пустой `items` и прирост в `gained`). Значит ОДИНОЧНОЕ
+   * ускорение ЛЮБОГО здания — реактора, силоса, бура — отдавало 500. Хрониум при этом
+   * не списывался (транзакция откатывалась), но и ускорение не покупалось никогда.
+   *
+   * Путь «ускорить всё» такой поправки уже не касался: он сверяет число работ-предметов,
+   * поэтому работал. Два близнеца расходились, и выглядело это как «одна кнопка
+   * ломается, другая нет», а не как сломанная механика зданий.
+   *
+   * Яма была жива с P6 и стала бы видна массово ровно в тот момент, когда новичку
+   * дали бы доступное первое сооружение: 15-минутный бур + кнопка «Ускорить» = 500.
+   * Ни один тест выше её не ловил, потому что все гоняли чертежи (`LASER`,
+   * `PLASMA`, `RAILGUN`), а не реестр сооружений.
+   */
+  it('мгновенное завершение здания достраивает его и не бросает', () => {
+    const started = startBuild(funded(), BORE, T0, idFactory);
+    expect(started.job.kind).toBe('structure');
+
+    const rushed = applyChroniumSpeedup(started.account, started.job.id, T0, idFactory);
+
+    expect(rushed.account.structures[BORE]).toBe(1);
+    expect(rushed.account.builds).toHaveLength(0);
+    expect(rushed.items).toHaveLength(0);
+    expect(rushed.cost).toBe(15);
+    expect(rushed.account.materials.chronium).toBe(1000 - 15);
+  });
+
+  it('забитый инвентарь не мешает ускорить здание — ни полному, ни частичному', () => {
+    // Слот здания не нужен, поэтому и платить за «освободи место» ему не за что
+    // (см. `describeSpeedup`: проверка комнаты стоит только на работах-предметах).
+    // До правки хаб этой разницы не делал: витрина рисовала кнопку активной, а
+    // запрос отвечал 409 — расхождение витрины и касы в сторону отказа платить.
+    const started = startBuild(funded(), BORE, T0, idFactory);
+    const crowded: UserAccount = { ...started.account, inventory: inventoryOf(MAX_INVENTORY_ITEMS) };
+
+    const rushed = applyChroniumSpeedup(crowded, started.job.id, T0, idFactory);
+    expect(rushed.account.structures[BORE]).toBe(1);
+    expect(rushed.account.inventory).toHaveLength(MAX_INVENTORY_ITEMS);
+
+    // Симметричный путь: «долить с избытком» над зданием при полном рюкзаке.
+    const second = startBuild(crowded, BORE, T0, idFactory);
+    const partial = speedupCraft(second.account, second.job.id, 999, T0, idFactory);
+    expect(partial.done).toBe(true);
+    expect(partial.account.structures[BORE]).toBe(1);
+    expect(partial.leftover).toBe(999 - 15);
+  });
+
+  it('частичное ускорение здания сдвигает таймер, не трогая счётчик', () => {
+    const started = startBuild(funded(), BORE, T0, idFactory);
+    const rushed = speedupCraft(started.account, started.job.id, 5, T0, idFactory);
+
+    expect(rushed.account.structures[BORE]).toBe(0);
+    expect(rushed.job.endsAt).toEqual(addMs(T0, 10 * MINUTE));
+    expect(rushed.account.materials.chronium).toBe(995);
+  });
+
+  it('смешанная очередь: «ускорить всё» выдаёт и предмет, и здание', () => {
+    const first = startBuild(funded(), LASER, T0, idFactory);
+    const second = startBuild(first.account, REACTOR, T0, idFactory);
+
+    const rushed = speedupAllBuilds(second.account, T0, idFactory);
+
+    expect(rushed.items.map((item) => item.code)).toEqual([LASER]);
+    expect(rushed.account.structures[REACTOR]).toBe(1);
+    expect(rushed.account.builds).toHaveLength(0);
+  });
+});
+

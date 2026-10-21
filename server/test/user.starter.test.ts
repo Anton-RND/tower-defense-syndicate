@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getAdOffer } from '../src/config/ads.js';
 import { STARTER_KIT } from '../src/config/starter.js';
+import { getStructure } from '../src/config/structures.js';
 import { getBlueprint, junkTotal, materialEntries } from '../src/config/workshop.js';
 import { ErrorCodes } from '../src/lib/errors.js';
 import { claimAdReward, openAdSession } from '../src/modules/ads/rewarded.js';
@@ -40,10 +41,13 @@ function virgin() {
 
 const DRONE_CODE = 'drone_cargo_mk1';
 const TOWER_CODE = 'tower_laser_mk1';
+const BORE_ID = 'bore_ore_mk1';
 const DRONE = getBlueprint(DRONE_CODE);
 const TOWER = getBlueprint(TOWER_CODE);
+const BORE = getStructure(BORE_ID);
 
 if (!DRONE || !TOWER) throw new Error('фикстура: чертежи первого тира переименованы');
+if (!BORE || !BORE.mine) throw new Error('фикстура: первый рудный бур удалён из реестра');
 
 /** Реклама по умолчанию выключена (ADS_ENABLED=false), поэтому для неё свой конфиг. */
 const adsConfig = testConfig({ ADS_ENABLED: 'true', ADS_DAILY_REWARDS: '20' });
@@ -58,12 +62,21 @@ describe('starter: комплект размыкает круг производ
     expect(fresh.resources.ferrum).toBe(0);
   });
 
-  it('комплекта хватает на первый дрон И на первую турель одновременно', () => {
-    // Инвариант проверяется по таблице чертежей, а не по выдуманным числам: правка
+  it('комплекта хватает на первого дрона, первую турель И первый рудный бур', () => {
+    // Инвариант проверяется по таблице цен, а не по выдуманным числам: правка
     // стоимости тир-1 обязана либо пройти этот тест, либо заставить поменять KIT.
-    for (const blueprint of [DRONE, TOWER]) {
-      for (const [id, amount] of materialEntries(blueprint.cost)) {
-        expect(STARTER_KIT[id] ?? 0, `${id}: комплекта не хватает на ${blueprint.code}`).toBeGreaterThanOrEqual(amount);
+    // Бур здесь — не случайность: без него комплект размыкал только мастерскую,
+    // а завод оставался запертым целиком (ни одно сооружение реестра не
+    // покупалось на стартовые 600 железа и 20 чёрмета). Та же яма, что с хламом,
+    // только этажом выше, и лечится она тем же: первым шагом из стартовых ресурсов.
+    const firstSteps: Array<{ name: string; cost: typeof DRONE.cost }> = [
+      { name: DRONE.code, cost: DRONE.cost },
+      { name: TOWER.code, cost: TOWER.cost },
+      { name: BORE.id, cost: BORE.cost }
+    ];
+    for (const step of firstSteps) {
+      for (const [id, amount] of materialEntries(step.cost)) {
+        expect(STARTER_KIT[id] ?? 0, `${id}: комплекта не хватает на ${step.name}`).toBeGreaterThanOrEqual(amount);
       }
     }
   });
@@ -86,6 +99,18 @@ describe('starter: комплект размыкает круг производ
     // держит это на уровне данных, а не типов: завтра кто-то расширит union.
     expect(Object.keys(STARTER_KIT)).not.toContain('asterium');
     expect(Object.keys(STARTER_KIT)).not.toContain('sec');
+  });
+
+  it('с комплекта ставится в очередь и первый станок завода — рудный бур Mk.I', () => {
+    // Проверка именно пути «очередь роботов», а не арифметики: сооружение —
+    // счётчик, оно не требует слота инвентаря и не встаёт на клетку лабиринта.
+    const kit = applyStarterKit(virgin(), T0).account;
+    const bored = startBuild(kit, BORE_ID, T0, idFactory);
+    expect(bored.job.kind).toBe('structure');
+    expect(bored.structure?.id).toBe(BORE_ID);
+    // После бура остатка железа обязано хватить на первую стену (40 железа):
+    // комплект покупает не только станок, но и оборону за ним.
+    expect(bored.account.resources.ferrum).toBeGreaterThanOrEqual(40);
   });
 
   it('каждое зерно комплекта уходит в журнал с причиной `starter` и своим ключом', () => {

@@ -475,19 +475,48 @@ function applyChroniumToJob(
 
   // Догоняем очередь только если работа дошла до нуля: иначе settle ничего не вернёт,
   // а лишний обход очереди на каждом частичном ускорении — пустая работа.
-  const settled = done
+  //
+  // Аннотация `SettleResult` обязательна, а не косметична: union, собранный тернарником
+  // по флагу `done`, TypeScript по этому флагу НЕ сужает, и без явной формы обращение к
+  // `settled.gained` ниже не компилировалось. Пустой `gained` у холостой ветки честен:
+  // догона не было, прироста нет.
+  const settled: SettleResult = done
     ? settleBuilds(shifted, now, idFactory)
-    : { account: shifted, items: [] as InventoryItem[], overflow: 0 };
+    : { account: shifted, items: [] as InventoryItem[], overflow: 0, gained: {} };
 
-  if (done && settled.items.length !== 1) {
-    // Бросок внутри редуктора = транзакция не записана, хрониум не списан. Хуже всего
-    // здесь «проглотить» молча: игрок увидел бы списание без предмета.
-    throw new AppError(ErrorCodes.INTERNAL, 500, 'Хрониум списан, а предмет в инвентарь не приехал', {
-      jobId: job.id,
-      units,
-      issued: settled.items.length,
-      overflow: settled.overflow
-    });
+  if (done) {
+    if (job.kind === 'structure') {
+      // Сооружение в инвентарь не приезжает BY CONSTRUCTION: это счётчик, а не
+      // предмет (шапка config/structures.ts), и `settled.items` для него пуст всегда.
+      // Сквозная проверка «ровно один предмет» превращала ОДИНОЧНОЕ ускорение любого
+      // здания — реактора, силоса, бура — в 500: хрониум не списывался (транзакция
+      // откатывалась), но и ускорение не покупалось никогда.
+      //
+      // Показательная деталь: путь «ускорить всё» (`speedupAllBuilds`, ниже в этом
+      // файле) такую поправку УЖЕ содержал — там сверка идёт по числу работ-предметов.
+      // То есть два близнеца разошлись, и живой игрок мог заметить странность только
+      // как «кнопка в один клик ломается, а пачка работает».
+      // Бросок при этом обязан ОСТАТЬСЯ, только в другой валюте состояния: если
+      // счётчик не вырос, время куплено зря. Сюда же попадает случай, когда код
+      // work исчез из конфига — `settleBuilds` сжигает такую работу молча.
+      if ((settled.gained[job.code as StructureId] ?? 0) < 1) {
+        throw new AppError(ErrorCodes.INTERNAL, 500, 'Хрониум списан, а сооружение не выросло', {
+          jobId: job.id,
+          code: job.code,
+          units,
+          gained: settled.gained
+        });
+      }
+    } else if (settled.items.length !== 1) {
+      // Бросок внутри редуктора = транзакция не записана, хрониум не списан. Хуже всего
+      // здесь «проглотить» молча: игрок увидел бы списание без предмета.
+      throw new AppError(ErrorCodes.INTERNAL, 500, 'Хрониум списан, а предмет в инвентарь не приехал', {
+        jobId: job.id,
+        units,
+        issued: settled.items.length,
+        overflow: settled.overflow
+      });
+    }
   }
 
   return {
@@ -552,7 +581,13 @@ export function applyChroniumSpeedup(
   const remainingMs = job.endsAt.getTime() - now.getTime();
   const cost = chroniumPrice(remainingMs);
 
-  if (!hasGuaranteedRoom(base, now)) {
+  // Место в инвентаре нужно только работе-ПРЕДМЕТУ: сооружение приезжает в счётчик
+  // и слота не просит (шапка config/structures.ts). Пресеты кнопок (`describeSpeedup`,
+  // `describeSpeedupAll`) и пачка (`speedupAllBuilds`) это уже учитывали, а оба хаба
+  // списания — нет, и расхождение было молчаливым: витрина рисовала кнопку активной
+  // (`reason: 'ok'`), а запрос возвращал 409 «освободите место» за проблему, которой
+  // у здания нет.
+  if (job.kind !== 'structure' && !hasGuaranteedRoom(base, now)) {
     throw new AppError(ErrorCodes.INVENTORY_FULL, 409, 'Инвентарь не примет ускоренную работу — освободите место', {
       inventory: base.inventory.length,
       limit: MAX_INVENTORY_ITEMS,
@@ -611,7 +646,8 @@ export function speedupCraft(
   const charged = Math.min(chroniumAmount, fullCost);
   const willFinish = charged >= fullCost;
 
-  if (willFinish && !hasGuaranteedRoom(base, now)) {
+  // Та же граница, что в `applyChroniumSpeedup`: предмет нужен только работе-предмету.
+  if (willFinish && job.kind !== 'structure' && !hasGuaranteedRoom(base, now)) {
     throw new AppError(ErrorCodes.INVENTORY_FULL, 409, 'Инвентарь не примет ускоренную работу — освободите место', {
       inventory: base.inventory.length,
       limit: MAX_INVENTORY_ITEMS,

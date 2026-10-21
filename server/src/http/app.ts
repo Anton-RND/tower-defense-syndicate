@@ -1,5 +1,5 @@
 import cors from '@fastify/cors';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 
 import { AppError, ErrorCodes } from '../lib/errors.js';
 import { publicConfig } from '../modules/economy/view.js';
@@ -108,12 +108,19 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     adOffers: describeAdOffers()
   }));
 
-  app.get('/', async (_request, reply) => reply.type('text/html; charset=utf-8').send(loadDebugPage()));
-  app.get('/debug', async (_request, reply) => reply.type('text/html; charset=utf-8').send(loadDebugPage()));
+  // Стендовые страницы отдаём без кэша. Причина не гипотетическая: `play.html` и
+  // `debug.html` кэшируются на процесс (playPage.ts:33), поэтому правка HTML видна
+  // только после перезапуска. Если сверху повиснет ещё и кэш браузера, починенный
+  // стенд продолжит показывать старую страницу, и это выглядит как «фикс не помог» —
+  // ровно ложный багрепорт, который невозможно воспроизвести по коду.
+  const noStore = (reply: FastifyReply) => reply.header('Cache-Control', 'no-store');
+
+  app.get('/', async (_request, reply) => noStore(reply).type('text/html; charset=utf-8').send(loadDebugPage()));
+  app.get('/debug', async (_request, reply) => noStore(reply).type('text/html; charset=utf-8').send(loadDebugPage()));
   // Полигон с отрисовкой поля: редактор планировки и проигрыватель боя. Тот же
   // принцип — HTML рядом файлом, никакой сборки и ни одной клиентской копии констант
   // баланса (геометрия берётся из /v1/config, боевые цифры — из ответа рейда).
-  app.get('/play', async (_request, reply) => reply.type('text/html; charset=utf-8').send(loadPlayPage()));
+  app.get('/play', async (_request, reply) => noStore(reply).type('text/html; charset=utf-8').send(loadPlayPage()));
 
   registerAuthRoutes(app, ctx);
   registerEconomyRoutes(app, ctx);

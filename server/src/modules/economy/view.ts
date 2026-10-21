@@ -126,6 +126,15 @@ export interface StructureView {
   secCost: number;
   /** Выполнены ли предпосылки (`requires`) — кнопка «строить» активна только при true. */
   unlocked: boolean;
+  /**
+   * Прирост ставки добычи этого вида, или null, если он добывать не способен.
+   *
+   * Поле нужно витрине, а не движку: станок, который даёт +40 руды в час и никак
+   * не проявляется в таблице сооружений (кВт 0, тепло 0), игрок вынужден опознавать
+   * по диффу двух опросов экономики. Тот же принцип, что у колонки SEC: причина
+   * дохода называется строкой из ответа сервера, а не догадкой по коду постройки.
+   */
+  mine: { resources: readonly StorageId[]; perHour: number } | null;
 }
 
 export interface EnergyView {
@@ -530,6 +539,7 @@ export function describeEconomy(account: UserAccount, now: Date, config: AppConf
       buildMs: def.buildMs,
       cost: { ...def.cost } as Record<string, number>,
       secCost: structureSecCost(def, count),
+      mine: def.mine ? { resources: [...def.mine.resources], perHour: def.mine.perHour } : null,
       unlocked: Object.entries(def.requires ?? {}).every(
         ([code, need]) => (account.structures[code as StructureId] ?? 0) >= (need ?? 0)
       )

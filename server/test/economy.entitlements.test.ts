@@ -12,6 +12,7 @@ import {
 } from '../src/modules/economy/entitlements.js';
 import { computeEnergyTick } from '../src/modules/economy/energy.js';
 import { computeMiningTick } from '../src/modules/economy/mining.js';
+import { getStructure } from '../src/config/structures.js';
 import { applyEconomyTick } from '../src/modules/economy/tick.js';
 import { AppError, ErrorCodes } from '../src/lib/errors.js';
 import { HOUR, T0, addMs, entitlement, newAccount, testConfig } from './fixtures.js';
@@ -57,6 +58,40 @@ describe('entitlements: резолв эффектов', () => {
     expect(isEntitlementActive(expired, T0)).toBe(false);
     const account = { ...base, entitlements: [expired] };
     expect(effectiveMiningRates(account, T0).ferrum).toBe(base.miningRates.ferrum);
+  });
+
+  it('рудный бур поднимает ставку добычи сверх базы', () => {
+    // Смысл бура: единственный путь роста добычи, не купленный за рубли
+    // (config/shop.ts `mine_x2_24h`). Числа берутся из реестра, а не пишутся здесь:
+    // правка баланса не должна требовать правки теста.
+    const bore = getStructure('bore_ore_mk1');
+    if (!bore?.mine) throw new Error('фикстура: первый рудный бур удалён из реестра');
+    const per = bore.mine.perHour;
+    const base = newAccount(config);
+    const account = { ...base, structures: { ...base.structures, bore_ore_mk1: 2 } };
+    const rates = effectiveMiningRates(account, T0);
+    for (const resource of bore.mine.resources) {
+      expect(rates[resource], `${resource}: бур не добавил ставку`).toBe((base.miningRates[resource] ?? 0) + 2 * per);
+    }
+    // Ресурсы вне списка бура не сдвигаются: `resources` в декларации — закон.
+    for (const resource of ['uranium', 'plasma', 'deuterium', 'nitrogen'] as const) {
+      if (bore.mine.resources.includes(resource)) continue;
+      expect(rates[resource]).toBe(base.miningRates[resource] ?? 0);
+    }
+  });
+
+  it('привилегия множит базу, а не доход буров: срок акции не обесценивает станки', () => {
+    // Граница, обоснованная в `effectiveMiningRates`: если бы множитель касался
+    // суммы, купленный «Добыча ×2» молча удваивал бы давно построенные буры, и
+    // долгосрочное вложение в завод зависело бы от того, идёт ли скидка.
+    const base = newAccount(config);
+    const per = getStructure('bore_ore_mk1')?.mine?.perHour ?? 0;
+    const account = {
+      ...base,
+      structures: { ...base.structures, bore_ore_mk1: 1 },
+      entitlements: [entitlement({ kind: 'mine_boost', value: 2, expiresAt: addMs(T0, HOUR) })]
+    };
+    expect(effectiveMiningRates(account, T0).ferrum).toBe((base.miningRates.ferrum ?? 0) * 2 + per);
   });
 
   it('бессрочная привилегия активна всегда', () => {
