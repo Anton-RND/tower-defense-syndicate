@@ -1,4 +1,4 @@
-import type { CoinId, OreId, StorageId } from './storage.js';
+import { ORE_IDS, type CoinId, type OreId, type StorageId } from './storage.js';
 import type { MaterialCost } from './workshop.js';
 
 /**
@@ -29,6 +29,7 @@ import type { MaterialCost } from './workshop.js';
 export const STRUCTURE_IDS = [
   'bore_ore_mk1',
   'bore_ore_mk2',
+  'bore_ore_mk3',
   'reactor_plasma_mk1',
   'reactor_plasma_mk2',
   'reactor_plasma_mk3',
@@ -294,6 +295,13 @@ export const STRUCTURES: readonly StructureDef[] = [
   // Ряд T1 → T2 держится на том же принципе, что и остальной реестр: прирост
   // ставки растёт быстрее цены (×2,75 при ×2,5 в железе), но требует предшественника,
   // поэтому купить себе весь доход с налёту не выйдет.
+  //
+  // T2 → T3 разворачивает этот ряд наоборот, и это не оплошность баланса: выход
+  // растёт МЕДЛЕННЕЕ цены (×3,15 суммарных ед./ч при ×3,67 в железе). Третий бур
+  // продаёт не объём, а ДОСТУП — он единственный роет плазму, без которой
+  // конвертеры (8/19/44 плазмы в час) остаются узким местом всей экономики.
+  // Платить за доступ дороже, чем за тонну, нормально; обратный обмен означал бы,
+  // что T3 следовало разменять на три T2.
   {
     id: 'bore_ore_mk1',
     name: 'Рудный бур Mk.I',
@@ -318,6 +326,25 @@ export const STRUCTURES: readonly StructureDef[] = [
     mine: { resources: ['ferrum', 'silicium', 'uranium'], perHour: 110 },
     priority: POWER_PRIORITY.mining,
     requires: { bore_ore_mk1: 2 }
+  },
+  {
+    id: 'bore_ore_mk3',
+    name: 'Рудный бур Mk.III',
+    tier: 3,
+    cost: { ferrum: 5500, silicium: 2600, black_metal: 900, colored_metal: 500, wolfram: 120, boards: 40 },
+    buildMs: 8 * 60 * 60_000,
+    maxPerBase: 6,
+    power: 0,
+    heat: 0,
+    // Единственный бур, берущий плазму, и потому единственная не-платная крышка
+    // для голодания плазменных конвертеров: Mk.I жжёт 8 плазмы/ч, Mk.III — 44, и
+    // без собственного источника руды весь энергетический этаж игры висит на
+    // ставке 2/ч из env. Список взят `ORE_IDS`, а не перечислен вручную: см. страж
+    // в `workshop.structures.test.ts` — он требует, чтобы каждая руда из
+    // `config/storage.ts: ORE_IDS` была кем-то прорыта.
+    mine: { resources: ORE_IDS, perHour: 260 },
+    priority: POWER_PRIORITY.mining,
+    requires: { bore_ore_mk2: 2 }
   },
 
   // ─── Энергетика: плазменные конвертеры ──────────────────────────────────────

@@ -94,6 +94,23 @@ describe('entitlements: резолв эффектов', () => {
     expect(effectiveMiningRates(account, T0).ferrum).toBe((base.miningRates.ferrum ?? 0) * 2 + per);
   });
 
+  it('бур Mk.III кормит плазмой накопитель, а не только строчку в таблице ставок', () => {
+    // Смысл третьего бура — не цифра в витрине, а то, что `computeMiningTick` по
+    // плазме перестаёт считать 2/ч из env. Проверка идёт через тик, а не только
+    // через ставки: реестр, привилегии и ёмкость сходятся именно в тике, и только
+    // там ошибка даёт настоящие, а не нарисованные ресурсы.
+    const bore3 = getStructure('bore_ore_mk3');
+    if (!bore3?.mine) throw new Error('фикстура: бур Mk.III удалён из реестра');
+    if (!bore3.mine.resources.includes('plasma')) throw new Error('фикстура: Mk.III перестал рыть плазму');
+
+    const base = newAccount(config);
+    const account = { ...base, structures: { ...base.structures, bore_ore_mk3: 1 } };
+    expect(effectiveMiningRates(account, T0).plasma).toBe((base.miningRates.plasma ?? 0) + bore3.mine.perHour);
+
+    const tick = computeMiningTick(account, addMs(T0, HOUR), rules);
+    expect(tick.gained.plasma).toBeGreaterThanOrEqual(bore3.mine.perHour);
+  });
+
   it('бессрочная привилегия активна всегда', () => {
     const slot = entitlement({ kind: 'builder_slot', value: 1, permanent: true, expiresAt: null });
     expect(isEntitlementActive(slot, addMs(T0, 100 * 365 * 24 * HOUR))).toBe(true);

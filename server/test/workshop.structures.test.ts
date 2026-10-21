@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { BLUEPRINTS, MAX_INVENTORY_ITEMS, getBlueprint, isMaterialId, materialEntries } from '../src/config/workshop.js';
-import { MAX_STRUCTURE_TOTAL, STRUCTURES, getStructure, miningBonus, structureSecCost, type StructureId } from '../src/config/structures.js';
+import { ORE_IDS } from '../src/config/storage.js';
+import { MAX_STRUCTURE_TOTAL, STRUCTURES, getStructure, miningBonus, structureSecCost, type StructureDef, type StructureId } from '../src/config/structures.js';
 import { unitPowerProfile } from '../src/modules/economy/power.js';
 import { AppError, ErrorCodes } from '../src/lib/errors.js';
 import { settleBuilds, startBuild } from '../src/modules/workshop/craft.js';
@@ -18,7 +19,8 @@ import {
   withJunk,
   withMetals,
   withResources,
-  withStructures
+  withStructures,
+  withTech
 } from './fixtures.js';
 import type { UserAccount } from '../src/modules/user/user.types.js';
 
@@ -377,5 +379,75 @@ describe('workshop/structures: добыча руды постройками', ()
     expect(def.output, 'бур не должен дублировать майнинг через промышленность').toBeUndefined();
     expect(def.power).toBe(0);
     expect(def.heat).toBe(0);
+  });
+});
+
+describe('workshop/structures: линия буров закрывает обещание каталога', () => {
+  const BORE = 'bore_ore_mk1';
+  const BORE2 = 'bore_ore_mk2';
+  const BORE3 = 'bore_ore_mk3';
+
+  /** Суммарный выход добывающего сооружения, ед./час (перечь × числу руд). */
+  const yieldPerHour = (def: StructureDef): number => (def.mine?.perHour ?? 0) * (def.mine?.resources.length ?? 0);
+
+  it('каждая руда реестра прорыта хотя бы одним буром', () => {
+    // Страж копирайта, а не баланса. Карточка ВК (VK_CATALOG.md) обещает: «буры роют
+    // железо, кремний, уран и плазму». Пока последнее слово было неправдой, игра
+    // продавала доступ к топливу, которого в реестре не было: плазменный конвертер
+    // Mk.I требует 8 плазмы/ч, а рыла её только ставка 2/ч из env — то есть весь
+    // энергетический этаж висел на одном бесплатном экстракторе.
+    const dug = new Set<string>(STRUCTURES.flatMap((def) => def.mine?.resources ?? []));
+    for (const ore of ORE_IDS) {
+      expect(dug.has(ore), `руда ${ore} не роется ни одним буром, а каталог её обещает`).toBe(true);
+    }
+  });
+
+  it('плазму роет ровно один вид, и это верхний тир линии', () => {
+    // Один источник на самую дорогую руду — осознанная форма: если бы плазму давал
+    // и Mk.I, и Mk.III, разница между тирами свелась бы к цифре в `perHour`, и ряд
+    // перестал бы быть лестницей доступа.
+    const plasmaBores = STRUCTURES.filter((def) => def.mine?.resources.includes('plasma'));
+    expect(plasmaBores.map((def) => def.id)).toEqual([BORE3]);
+    expect(plasmaBores[0]?.tier).toBe(3);
+  });
+
+  it('Mk.III требует два Mk.II и не строится раньше, чем предшественник отработал', () => {
+    const def = getStructure(BORE3)!;
+    expect(Object.keys(def.requires ?? {}), 'цепочка буров обязана быть линейной').toEqual([BORE2]);
+    expect(def.requires?.[BORE2 as StructureId]).toBe(2);
+  });
+
+  it('отказ по предшественнику приходит до списания материалов, а два Mk.II открывают стройку', () => {
+    const account = withTech(funded(), { wolfram: 500 });
+    const before = { ...account.resources };
+    expect(errorCode(() => startBuild(account, BORE3, T0, idFactory))).toBe(ErrorCodes.STRUCTURE_REQUIRES);
+    expect(account.resources).toEqual(before);
+
+    // Одного Mk.II мало. Порядок проверок здесь — сначала материалы, потом
+    // предшественник, и это не дыра: отказ бросается ДО редуктора, поэтому
+    // «почти построил» не стоит игроку ни единицы железа. Проверяем именно это.
+    const partial = withStructures(withStructures(account, { [BORE]: 2 }), { [BORE2]: 1 });
+    const held = { ...partial.resources };
+    expect(errorCode(() => startBuild(partial, BORE3, T0, idFactory))).toBe(ErrorCodes.STRUCTURE_REQUIRES);
+    expect(partial.resources).toEqual(held);
+
+    const ready = withStructures(partial, { [BORE2]: 2 });
+    expect(startBuild(ready, BORE3, T0, idFactory).structure?.id).toBe(BORE3);
+  });
+
+  it('выход Mk.III растёт медленнее его цены: тир продаёт доступ, а не тонну', () => {
+    // Инвариант ряда, а не проверка баланса: до T3 каждый следующий бур отдаёт больше
+    // добычи на вложенное железо, и ломается это ровно на плазме. Если балансировщик
+    // разменяет T3 в объём («+500 ко всему»), тест попросит его перечитать шапку линии.
+    const b2 = getStructure(BORE2)!;
+    const b3 = getStructure(BORE3)!;
+    expect(yieldPerHour(b3) / yieldPerHour(b2)).toBeLessThan(b3.cost.ferrum! / b2.cost.ferrum!);
+  });
+
+  it('потолок Mk.III не ниже Mk.II: лестница не сужается наверху без причины', () => {
+    const b2 = getStructure(BORE2)!;
+    const b3 = getStructure(BORE3)!;
+    expect(b3.maxPerBase).toBeGreaterThanOrEqual(1);
+    expect(b3.buildMs).toBeGreaterThan(b2.buildMs);
   });
 });
