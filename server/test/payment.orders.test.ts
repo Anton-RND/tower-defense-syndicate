@@ -420,22 +420,24 @@ describe('orders.refundOrder: возврат платежа', () => {
   });
 });
 
-it('потолок истории заказов обрезает закрытые, но не живые', () => {
-  const tiny = testConfig({ PAYMENTS_ENABLED: 'true', PAYMENT_HISTORY: '2' });
-  let account = buyer(5000, 0);
-  for (let i = 0; i < 4; i += 1) {
-    const placed = openOrder(account, PACK, addMs(T0, i * DAY), tiny.economy, `h-${i}`);
-    account = confirmPurchase(
-      placed.account,
-      placed.order.id,
-      { item: PACK },
-      addMs(T0, i * DAY + MINUTE),
-      tiny.economy,
-      idFactory
-    ).account;
-  }
-  expect(account.orders.length).toBeLessThanOrEqual(2);
-  expect(describeOrders(account).every((row) => row.status === 'fulfilled')).toBe(true);
+describe('payment.history: потолок журнала заказов', () => {
+  it('потолок истории заказов обрезает закрытые, но не живые', () => {
+    const tiny = testConfig({ PAYMENTS_ENABLED: 'true', PAYMENT_HISTORY: '2' });
+    let account = buyer(5000, 0);
+    for (let i = 0; i < 4; i += 1) {
+      const placed = openOrder(account, PACK, addMs(T0, i * DAY), tiny.economy, `h-${i}`);
+      account = confirmPurchase(
+        placed.account,
+        placed.order.id,
+        { item: PACK },
+        addMs(T0, i * DAY + MINUTE),
+        tiny.economy,
+        idFactory
+      ).account;
+    }
+    expect(account.orders.length).toBeLessThanOrEqual(2);
+    expect(describeOrders(account).every((row) => row.status === 'fulfilled')).toBe(true);
+  });
 });
 
 // ─── Точка сборки: сторы + журнал ─────────────────────────────────────────────

@@ -512,6 +512,9 @@ describe('clan.membership: роспуск и источник истины чл�
     expect(joined.clan.members).toEqual(['u-1', account.id]);
     expect(leaveClan(joined.account, joined.clan, T0).clan.members).toEqual(['u-1']);
     expect(disbandClan(clan, 'u-1', 'test', T0).status).toBe('void');
+  });
+});
+
 describe('clan.view и журнал взносов', () => {
   it('витрина отдаёт счётчики, а не список участников', async () => {
     const deps = await harness();
@@ -636,9 +639,6 @@ describe('clan.mongo: маппинг документа клана', () => {
     const uniqueName = indexes.find(([, options]) => options?.unique === true);
     expect(Object.keys(uniqueName?.[0] ?? {})).toContain('name');
     expect(indexes.some(([fields]) => Object.keys(fields ?? {}).includes('members'))).toBe(true);
-  });
-});
-
   });
 });
 
