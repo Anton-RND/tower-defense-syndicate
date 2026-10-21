@@ -1,4 +1,4 @@
-import { type AppConfig } from '../../config/env.js';
+import { authModeOf, isVkConfigured, type AppConfig } from '../../config/env.js';
 import { ORE_IDS, STORAGE_IDS, STORAGE_LABEL, type StorageId } from '../../config/storage.js';
 import { MAX_DEPLOYED_UNITS, MAX_WALLS, publicBaseConfig, type Cell } from '../../config/base.js';
 import {
@@ -729,7 +729,11 @@ export function describeSession(claims: SessionClaims, expiresAt: Date): Record<
 export function publicConfig(config: AppConfig): Record<string, unknown> {
   const limits = config.economy.limits;
   return {
-    platform: { vk: config.vk.appId > 0, tg: config.tg.botToken !== null },
+    platform: { vk: isVkConfigured(config), tg: config.tg.botToken !== null },
+    // Режим входа, а не булевы догадки по отдельным полям: витрина по нему решает,
+    // тянуть ли initData площадки или показывать стенную форму, и обязана ошибиться
+    // здесь не может — правду считает authModeOf, а не клиент.
+    auth: { mode: authModeOf(config) },
     store: config.store.driver,
     economy: {
       ...config.economy,

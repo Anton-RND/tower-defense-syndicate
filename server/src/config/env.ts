@@ -94,7 +94,54 @@ export interface AppConfig {
   economy: EconomyConfig;
   /** POST /v1/dev/vk/sign разрешён только вне production и при явном флаге. */
   devSignerEnabled: boolean;
+  /** true — подписанный postback рекламы настроен; см. requireProductionRules. */
+  adsPostbackReady: boolean;
+  security: SecurityConfig;
+  /** Сколько секунд процессу на дозавершение запросов при SIGTERM/SIGINT. */
+  shutdownTimeoutMs: number;
+  /**
+   * Приём подписанных событий площадки (платежи). `serviceId` — id сущности-источника
+   * в схеме HMAC; 0 в окружении означает «брать VK_APP_ID» (см. provider.vk.ts).
+   */
+  vkEvents: { serviceId: number; maxAgeSec: number };
 }
+
+/** Бюджет необработанных запросов на один адрес. 0 — соответствующий лимитер выключен. */
+export interface RateLimitConfig {
+  /** `/v1/auth/*` — перебор initData и подбор socialId. */
+  authPerMin: number;
+  /** `/callbacks/*` — площадка приходит пачками, но не бесконечно. */
+  eventPerMin: number;
+  /** Потолок одновременных адресов: без него карта лимитера сама становится DoS. */
+  maxKeys: number;
+  /** Ведро без обращений дольше этого срока выбрасывается при sweep. */
+  idleTtlMs: number;
+}
+
+export interface SecurityConfig {
+  /** Читать `X-Forwarded-For` — только когда сверху действительно наш прокси. */
+  trustForwardedFor: boolean;
+  rateLimit: RateLimitConfig;
+  /**
+   * Кому разрешено встраивать игру в iframe.
+   *
+   * ВК грузит приложение именно так, поэтому список обязан включать vk.com/vk.ru:
+   * шаблонный `X-Frame-Options: DENY` или `frame-ancestors 'none'` не смягчает
+   * защиту, а выключает игру целиком — приложение перестанет открываться.
+   * `X-Frame-Options` поэтому не отправляется вовсе: он не понимает списков
+   * источников, и один провайдер с нестандартным поддоменом убил бы вход.
+   */
+  frameAncestors: string[];
+}
+
+/** Чем игрок входит в игру на текущем конфиге. */
+export type AuthMode =
+  /** Боевой путь: VK_APP_ID + VK_SECRET_KEY заданы, подпись initData проверяется. */
+  | 'vk'
+  /** Стенд: вход по голому socialId, только вне production. */
+  | 'dev'
+  /** Ни того, ни другого: витрина обязана сказать причину, а не молча ловить 403. */
+  | 'disabled';
 
 const logLevels = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
 
@@ -157,6 +204,40 @@ const envSchema = z.object({
   JUNK_CAP: z.coerce.number().int().nonnegative().default(20000),
   PVP_DAILY_ATTACKS: z.coerce.number().int().nonnegative().default(30),
   REFERRAL_DAILY_MAX: z.coerce.number().int().nonnegative().default(20),
+
+  // ─── Продакшн-обвязка (P10) ────────────────────────────────────────────────
+  /**
+   * Доверять `X-Forwarded-For` при определении адреса клиента.
+   *
+   * По умолчанию нет: заголовок пишет кто угодно, и включённый без прокси флаг
+   * превращает лимитер в самообман (атакующий сам выбирает себе ведро). Включать
+   * только тогда, когда сверху стоит наш reverse proxy, который этот заголовок
+   * перезаписывает, а не добавляет к нему.
+   */
+  TRUST_FORWARDED_FOR: z.enum(['true', 'false']).default('false'),
+  /** Запросов в минуту на адрес к маршрутам входа. 0 — лимитер выключен. */
+  RATE_LIMIT_AUTH_PER_MIN: z.coerce.number().int().min(0).max(1_000).default(10),
+  /** Запросов в минуту на адрес к маршрутам площадки. 0 — лимитер выключен. */
+  RATE_LIMIT_EVENT_PER_MIN: z.coerce.number().int().min(0).max(10_000).default(120),
+  /** Сколько адресов одновременно держат лимитеры: больше — только вытеснением. */
+  RATE_LIMIT_MAX_KEYS: z.coerce.number().int().min(1_000).max(1_000_000).default(50_000),
+  /** Ведро без обращений дольше этого срока выбрасывается: карта не раздувается. */
+  RATE_LIMIT_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(600_000),
+  /** Потолок ожидания дозавершения запросов при SIGTERM, сверх него — exit 1. */
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().max(120_000).default(15_000),
+  /** id сущности-источника в подписи событий площадки; 0 — брать VK_APP_ID. */
+  VK_EVENT_SERVICE_ID: z.coerce.number().int().nonnegative().default(0),
+  /** Как долго подписанное событие площадки ещё принимают (replay-окно). */
+  VK_EVENT_MAX_AGE_SECONDS: z.coerce.number().int().positive().max(86_400).default(3_600),
+  /**
+   * Подтверждение оператора, что подписанный postback рекламы настроен.
+   *
+   * Отдельный флаг, а не следствие ADS_ENABLED, намеренно: рекламный канал в этом
+   * монорепо пока не имеет обработчика подписанного подтверждения (в отличие от
+   * платёжного), и включённая реклама в проде дарила бы игрокам мёртвую кнопку.
+   */
+  ADS_POSTBACK_READY: z.enum(['true', 'false']).default('false'),
+
   DEV_SIGNER_ENABLED: z.enum(['true', 'false']).default('false')
 });
 
@@ -168,6 +249,20 @@ export class ConfigError extends Error {
     super(message);
     this.name = 'ConfigError';
   }
+}
+
+/**
+ * Разбор ALLOWED_ORIGINS в список.
+ *
+ * Одна функция на прод-проверку и на сборку конфига намеренно: две похожие
+ * реализации разъезжаются молча, и тогда проверка пропускает то, что runtime
+ * потом применит.
+ */
+export function parseOrigins(value: string): string[] {
+  return value
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 }
 
 function requireProductionRules(raw: z.infer<typeof envSchema>, source: NodeJS.ProcessEnv): void {
@@ -192,6 +287,32 @@ function requireProductionRules(raw: z.infer<typeof envSchema>, source: NodeJS.P
   }
   if (raw.DEV_SIGNER_ENABLED === 'true') problems.push('DEV_SIGNER_ENABLED запрещён в production');
 
+  // Хранилище в RAM: процесс падает раз в день на деплое, и вместе с ним исчезают
+  // кошельки, склады и заказы всех игроков. Это не «деградация», а потеря данных,
+  // поэтому memory в production — отказ старта, а не предупреждение в лог.
+  if (raw.STORE_DRIVER !== 'mongo') {
+    problems.push('STORE_DRIVER=mongo обязателен в production (memory теряет состояние при рестарте)');
+  }
+  // Распахнутый CORS в проде: WebView всегда приходит с известного источника, и
+  // `*` не добавляет ни одной легитимной возможности — только любой площадке,
+  // способной исполнить наш запрос от имени украденного токена.
+  const origins = parseOrigins(raw.ALLOWED_ORIGINS);
+  if (origins.length === 0) {
+    problems.push('ALLOWED_ORIGINS пуст: ни один источник не сможет вызвать API');
+  }
+  if (origins.includes('*')) {
+    problems.push('ALLOWED_ORIGINS=* запрещён в production — перечислите источники WebView явно');
+  }
+  // Dev-константа длиной 18 символов уже отсекается проверкой длины выше, но
+  // явное сравнение держит смысл в одном месте: «секрет не подменён примером».
+  if (source.JWT_SECRET === DEV_JWT_SECRET) {
+    problems.push('JWT_SECRET совпадает с dev-константой DEV_JWT_SECRET');
+  }
+  // Реклама без подтверждённого postback: награду выдавать некому, кнопка мёртва.
+  if (raw.ADS_ENABLED === 'true' && raw.ADS_POSTBACK_READY !== 'true') {
+    problems.push('ADS_ENABLED=true требует ADS_POSTBACK_READY=true (подписанного postback в этом монорепо пока нет)');
+  }
+
   if (problems.length > 0) {
     throw new ConfigError(`Некорректная конфигурация production:\n - ${problems.join('\n - ')}`, problems);
   }
@@ -209,6 +330,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   const raw = parsed.data;
   requireProductionRules(raw, source);
+  const origins = parseOrigins(raw.ALLOWED_ORIGINS);
 
   const miningRates: Record<MiningResource, number> = {
     ferrum: raw.MINING_RATE_FERRUM,
@@ -230,9 +352,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       secret: raw.JWT_SECRET ?? DEV_JWT_SECRET,
       ttlSec: raw.JWT_TTL_SECONDS
     },
-    allowedOrigins: raw.ALLOWED_ORIGINS.split(',')
-      .map((o) => o.trim())
-      .filter(Boolean),
+    allowedOrigins: origins,
     vk: {
       appId: raw.VK_APP_ID,
       secretKey: raw.VK_SECRET_KEY,
@@ -286,10 +406,45 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       lootShare: raw.LOOT_SHARE,
       buildRobotsDefault: raw.BUILD_ROBOTS_DEFAULT
     },
-    devSignerEnabled: raw.DEV_SIGNER_ENABLED === 'true' && raw.NODE_ENV !== 'production'
+    devSignerEnabled: raw.DEV_SIGNER_ENABLED === 'true' && raw.NODE_ENV !== 'production',
+    adsPostbackReady: raw.ADS_POSTBACK_READY === 'true',
+    security: {
+      trustForwardedFor: raw.TRUST_FORWARDED_FOR === 'true',
+      rateLimit: {
+        authPerMin: raw.RATE_LIMIT_AUTH_PER_MIN,
+        eventPerMin: raw.RATE_LIMIT_EVENT_PER_MIN,
+        maxKeys: raw.RATE_LIMIT_MAX_KEYS,
+        idleTtlMs: raw.RATE_LIMIT_IDLE_MS
+      },
+      // Тот же список, что и на вызовы API: кто имеет право дёргать /v1/*, тот и
+      // встраивает игру. Разводить их — значит получить пару, разъезжающуюся молча.
+      frameAncestors: origins.filter((origin) => origin !== '*')
+    },
+    shutdownTimeoutMs: raw.SHUTDOWN_TIMEOUT_MS,
+    vkEvents: {
+      serviceId: raw.VK_EVENT_SERVICE_ID > 0 ? raw.VK_EVENT_SERVICE_ID : raw.VK_APP_ID,
+      maxAgeSec: raw.VK_EVENT_MAX_AGE_SECONDS
+    }
   };
 }
 
 export function isVkConfigured(config: Pick<AppConfig, 'vk'>): boolean {
   return config.vk.appId > 0 && config.vk.secretKey.length > 0;
+}
+
+/**
+ * Чем на этом конфиге входит игрок — один источник правды для `/health`,
+ * `/v1/config` и витрины.
+ *
+ * Причина завести это здесь, а не вычислять в двух местах по-своему: `GET /health`
+ * считал «ВК подключён» как `appId > 0`, а авторизация требует ещё и секрет
+ * (`isVkConfigured`). Половина координат в окружении — и витрина отправляет игрока
+ * на маршрут, отвечающий 500 VK_NOT_CONFIGURED. Разнобой был задокументирован в
+ * `.env.example` как известная боль вместо того, чтобы быть невозможным.
+ */
+export function authModeOf(config: Pick<AppConfig, 'vk' | 'devSignerEnabled'>): AuthMode {
+  if (isVkConfigured(config)) return 'vk';
+  // Стенд живёт без координат ВК: у него есть свой вход, и он же — единственная
+  // причина, по которой 'disabled' не наступает при appId = 0.
+  return config.devSignerEnabled ? 'dev' : 'disabled';
 }

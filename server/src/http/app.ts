@@ -2,6 +2,7 @@ import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 
 import { AppError, ErrorCodes } from '../lib/errors.js';
+import { authModeOf, isVkConfigured } from '../config/env.js';
 import { publicConfig } from '../modules/economy/view.js';
 import { describeCatalog } from '../config/shop.js';
 import { describeAdOffers } from '../config/ads.js';
@@ -88,7 +89,10 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     ok: true,
     env: ctx.config.env,
     store: ctx.config.store.driver,
-    vk: ctx.config.vk.appId > 0,
+    // `isVkConfigured`, а не `appId > 0`: флаг отвечал за половину координат и
+    // отправлял витрину на 500 VK_NOT_CONFIGURED (см. config/env.ts:authModeOf).
+    vk: isVkConfigured(ctx.config),
+    auth: authModeOf(ctx.config),
     payments: ctx.config.economy.limits.purchases.enabled,
     ads: ctx.config.economy.limits.ads.enabled,
     dev: ctx.config.devSignerEnabled,
