@@ -11,6 +11,7 @@ import { resolveRequestId } from './security.js';
 import { loadDebugPage } from './debugPage.js';
 import { loadPlayPage } from './playPage.js';
 import { registerAdsRoutes } from './routes/adsRoutes.js';
+import { registerAdsPostbackRoutes } from './routes/adsPostbackRoutes.js';
 import { registerAuthRoutes } from './routes/authRoutes.js';
 import { registerClanRoutes } from './routes/clanRoutes.js';
 import { registerDevRoutes } from './routes/devRoutes.js';
@@ -184,6 +185,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   registerMaterialsRoutes(app, ctx);
   registerShopRoutes(app, ctx);
   registerAdsRoutes(app, ctx);
+  // Постбэк рекламной сети — вне сессии игрока, поэтому отдельным маршрутом
+  // (см. шапку adsPostbackRoutes.ts).
+  registerAdsPostbackRoutes(app, ctx);
   registerPvpRoutes(app, ctx);
   registerClanRoutes(app, ctx);
   registerMarketRoutes(app, ctx);

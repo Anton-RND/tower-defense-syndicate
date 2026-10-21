@@ -15,10 +15,11 @@ import { accountAction, bodyOf, stringOf, viewOf } from '../helpers.js';
  * подтверждает постбэк рекламной сети, и только он вызывает /claim.
  *
  * Поэтому /claim закрыт отдельным гейтом DEV_SIGNER_ENABLED и здесь работает как
- * ЭМУЛЯЦИЯ постбэка. Боевой обработчик подписанного callback'а сети — это отдельный
- * маршрут вне сессии игрока (по образцу payment/vk postback), и в production он
- * обязан приходить из сети, а не от клиента: иначе rewarded-видео становится
- * бесплатной фабрикой энергии и убивает и экономику, и рекламный доход.
+ * ЭМУЛЯЦИЯ постбэка. Боевой обработчик подписанного callback'а сети — маршрут
+ * /callbacks/vk/ads (routes/adsPostbackRoutes.ts): вне сессии игрока, по образцу
+ * платёжного /callbacks/vk/events. В production награду рождает только подпись
+ * площадки, иначе rewarded-видео становится бесплатной фабрикой энергии и убивает
+ * и экономику, и рекламный доход.
  */
 export function registerAdsRoutes(app: FastifyInstance, ctx: AppContext): void {
   const auth = { preHandler: authHook(ctx) };

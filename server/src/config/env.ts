@@ -230,11 +230,12 @@ const envSchema = z.object({
   /** Как долго подписанное событие площадки ещё принимают (replay-окно). */
   VK_EVENT_MAX_AGE_SECONDS: z.coerce.number().int().positive().max(86_400).default(3_600),
   /**
-   * Подтверждение оператора, что подписанный postback рекламы настроен.
+   * Подтверждение оператора, что подписанный postback рекламы настроен в кабинете.
    *
-   * Отдельный флаг, а не следствие ADS_ENABLED, намеренно: рекламный канал в этом
-   * монорепо пока не имеет обработчика подписанного подтверждения (в отличие от
-   * платёжного), и включённая реклама в проде дарила бы игрокам мёртвую кнопку.
+   * Отдельный флаг, а не следствие ADS_ENABLED, намеренно: обработчик в монорепо есть
+   * (/callbacks/vk/ads), но живого вектора от рекламной сети нет — имена параметров и
+   * схему подписи сверяет человек. Включённая реклама без этой сверки дарила бы
+   * игрокам мёртвую кнопку.
    */
   ADS_POSTBACK_READY: z.enum(['true', 'false']).default('false'),
 
@@ -310,7 +311,7 @@ function requireProductionRules(raw: z.infer<typeof envSchema>, source: NodeJS.P
   }
   // Реклама без подтверждённого postback: награду выдавать некому, кнопка мёртва.
   if (raw.ADS_ENABLED === 'true' && raw.ADS_POSTBACK_READY !== 'true') {
-    problems.push('ADS_ENABLED=true требует ADS_POSTBACK_READY=true (подписанного postback в этом монорепо пока нет)');
+    problems.push('ADS_ENABLED=true требует ADS_POSTBACK_READY=true (postback сверен в кабинете и приходит на /callbacks/vk/ads)');
   }
 
   if (problems.length > 0) {
