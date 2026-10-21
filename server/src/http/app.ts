@@ -17,6 +17,22 @@ import { registerDevRoutes } from './routes/devRoutes.js';
 import { registerEconomyRoutes } from './routes/economyRoutes.js';
 import { registerMaterialsRoutes } from './routes/materialsRoutes.js';
 import { registerMarketRoutes } from './routes/marketRoutes.js';
+import { registerVkEventsRoutes } from './routes/vkEventsRoutes.js';
+
+/**
+ * Content-type парсер для `application/json` (C3). Замена дефолтного парсера
+ * Fastify ровно по одной причине: подпись событий площадки считается по СЫРЫМ
+ * байтам тела (payment/provider.vk.ts), а дефолтный парсер оставляет разобранный
+ * объект и молча теряет исходную строку. Здесь те же байты сохраняются в
+ * `request.rawBody` для `/callbacks/vk/events`, а в `request.body` по-прежнему
+ * кладётся обычный JSON — остальным маршрутам ничего не заметно.
+ */
+declare module 'fastify' {
+  interface FastifyRequest {
+    rawBody?: string;
+  }
+}
+
 import { registerPvpRoutes } from './routes/pvpRoutes.js';
 import { registerShopRoutes } from './routes/shopRoutes.js';
 import { registerWorkshopRoutes } from './routes/workshopRoutes.js';
@@ -47,6 +63,20 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   // ничем не отличается от отказа витрины по уровню доверия к transport-слою.
   app.addHook('onRequest', async (request, reply) => {
     ctx.security.headers(request, reply);
+  });
+
+  // Сырое тело для подписи площадки (см. declare module выше). `parseAs: 'string'`
+  // даёт байты как есть; плохой JSON → 400 тем же путём, что и у дефолтного
+  // парсера (errorHandler различает транспортные ошибки по `statusCode`).
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    request.rawBody = body as string;
+    try {
+      done(null, JSON.parse(body as string));
+    } catch (error) {
+      const parseError = new Error('Тело запроса не является валидным JSON') as Error & { statusCode: number };
+      parseError.statusCode = 400;
+      done(parseError);
+    }
   });
 
   const wildcard = ctx.config.allowedOrigins.includes('*');
@@ -158,6 +188,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   registerClanRoutes(app, ctx);
   registerMarketRoutes(app, ctx);
   registerDevRoutes(app, ctx);
+  // Подписанные события площадки — вне сессии игрока, поэтому отдельным
+  // маршрутом, а не внутри shopRoutes (см. шапку vkEventsRoutes.ts).
+  registerVkEventsRoutes(app, ctx);
 
   return app;
 }

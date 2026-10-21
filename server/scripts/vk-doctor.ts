@@ -18,6 +18,7 @@
  * или не получит уведомление.
  */
 import { isVkConfigured, loadConfig } from '../src/config/env.js';
+import { verifyVkEvent, signVkEvent } from '../src/modules/payment/provider.vk.js';
 import {
   VkSignatureScheme,
   inspectVkSignatures,
@@ -138,6 +139,32 @@ if (initDataArg && verified) {
       'современные Mini Apps подписывают по mini_app — проверь, что фронт не отдаёт старый bridge'
     );
   }
+}
+
+// ─── 2б. Событие площадки: та же круговая проверка подписи ───────────────────
+// `/callbacks/vk/events` проверяет подпись по `VK_EVENT_SERVICE_ID` (разрешённая
+// схема из payment/provider.vk.ts). Круговая проверка здесь повторяет трюк с
+// initData: если код подписи сломан в одном месте, врач сгодится и для второго.
+if (config.vk.secretKey.length > 0) {
+  const eventRaw = JSON.stringify({
+    event_id: 'doctor',
+    type: 'onAppPayment',
+    api_id: config.vk.appId,
+    sent_at: Math.floor(Date.now() / 1000),
+    reference: { item: 'doctor_item' }
+  });
+  const eventSignature = signVkEvent(eventRaw, config.vk.secretKey, config.vkEvents.serviceId);
+  const eventCheck = verifyVkEvent(eventRaw, eventSignature, {
+    secretKey: config.vk.secretKey,
+    serviceId: config.vkEvents.serviceId,
+    sentAt: Math.floor(Date.now() / 1000),
+    now: new Date(),
+    maxAgeSec: config.vkEvents.maxAgeSec
+  });
+  if (eventCheck.ok) ok('vk:events подпись', `service_id=${config.vkEvents.serviceId}`);
+  else bad('vk:events круговая подпись не сошлась', `reason=${eventCheck.reason}`);
+} else {
+  warn('событие площадки не проверяю', 'VK_SECRET_KEY пуст — см. выше');
 }
 
 // ─── 3. Транспорт уведомлений ────────────────────────────────────────────────
