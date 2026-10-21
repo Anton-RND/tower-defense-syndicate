@@ -139,4 +139,16 @@ describe('http/frontend-contract: пути фронта зарегистриро
     // «оплата обрабатывается», и без него фронт крутил бы 404 до конца таймаута.
     expect(serverRoutes.some((route) => route.raw === '/v1/shop/orders/:orderId')).toBe(true);
   });
+
+  it('реклама открывается и бросается через /v1/ads/* и никогда не климает сама', () => {
+    // VkAdsManager обязан стучаться ровно в эти маршруты: слот открывается до
+    // ролика, освобождается при отказе, а витрина кормит UI состоянием крана.
+    expect(clientPaths).toContain('/v1/ads/session');
+    expect(clientPaths).toContain('/v1/ads/abandon');
+    expect(clientPaths).toContain('/v1/ads/offers');
+    // ГЛАВНОЕ: награду выдаёт постбэк площадки, а не просьба клиента. /claim
+    // закрыт DEV_SIGNER_ENABLED и в production его нет — появление этого пути
+    // во фронте означает, что кто-то снова сделал из рекламы принтер энергии.
+    expect(clientPaths.some((path) => path.startsWith('/v1/ads/claim'))).toBe(false);
+  });
 });

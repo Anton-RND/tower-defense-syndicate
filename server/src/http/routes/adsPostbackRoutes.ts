@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { AppError, ErrorCodes, validationError } from '../../lib/errors.js';
 import { getAdOffer } from '../../config/ads.js';
-import { parseVkAdPostback, toVkParams } from '../../modules/ads/postback.js';
+import { parseVkAdPostback, resolveAdPostbackSession, toVkParams } from '../../modules/ads/postback.js';
 import { claimAdReward } from '../../modules/ads/rewarded.js';
 import { verifyVkSignature } from '../../modules/auth/vk.signature.js';
 import type { AppContext } from '../context.js';
@@ -17,6 +17,13 @@ import { accountAction, bodyOf } from '../helpers.js';
  * подписи площадки. `/v1/ads/claim` остался эмуляцией под DEV_SIGNER_ENABLED:
  * в production поля /claim нет по той же причине, по которой у платежей нет
  * «выдачи по кнопке» (см. шапку adsRoutes.ts).
+ *
+ * КОРРЕЛЯЦИЯ: ПОДПИСЬ ВАЖНЕЕ ИНДЕКСА. Мост площадки (vk-bridge 3.0.2) не умеет
+ * принимать наш идентификатор показа: `ShowNativeAdsRequest` — это только
+ * `ad_format` и `use_waterfall`. Поэтому `reward_id` из постбэка не обязан быть
+ * нашим id сессии, и выбор сессии делает резолвер домена (см. postback.ts):
+ * совпал — строгая выдача, не совпал или его нет — единственная живая сессия
+ * владельца из подписи. Режим пишется в лог (`correlated`) всегда.
  *
  * КОНТРАКТ С ПЛОЩАДКОЙ, ОТЛИЧНЫЙ ОТ ПЛАТЕЖЕЙ. У платежей идемпотентность
  * держится статусом заказа, и повторный вебхук честно отвечает 200-дубликатом.
@@ -54,28 +61,30 @@ export function registerAdsPostbackRoutes(app: FastifyInstance, ctx: AppContext)
       throw validationError('Параметры постбэка рекламы не соответствуют схеме');
     }
 
-    const { userId, sessionId } = parsed;
+    const { userId, rewardId } = parsed;
     const account0 = await ctx.users.findBySocial('vk', userId);
     if (!account0) {
-      ctx.logger.error('ad_postback_unknown_user', { requestId: request.id, userId, sessionId });
+      ctx.logger.error('ad_postback_unknown_user', { requestId: request.id, userId, rewardId });
       return reply.type('text/plain; charset=utf-8').send('ok');
     }
 
-    const pending = account0.ads.pending;
-    const offer = pending ? getAdOffer(pending.sku) : undefined;
-    if (!pending || pending.id !== sessionId || !offer) {
+    const session = resolveAdPostbackSession(account0, parsed);
+    const offer = session ? getAdOffer(session.pending.sku) : undefined;
+    if (!session || !offer) {
       // Валидная подпись + невыполнимый сценарий: чаще всего повторная доставка
-      // уже выданной сессии. Отвечаем «принято» и кладём причину в лог — см. шапку.
+      // уже выданной награды (слот пуст). Отвечаем «принято» и кладём причину в
+      // лог — см. шапку.
       ctx.logger.warn('ad_postback_ignored', {
         requestId: request.id,
         userId,
-        sessionId,
-        pendingId: pending?.id ?? null,
-        reason: offer ? 'session_mismatch' : 'offer_missing'
+        rewardId,
+        pendingId: account0.ads.pending?.id ?? null,
+        reason: session ? 'offer_missing' : 'no_pending_session'
       });
       return reply.type('text/plain; charset=utf-8').send('ok');
     }
 
+    const sessionId = session.pending.id;
     try {
       const { account, meta } = await accountAction(ctx, account0.id, now, (synced) => {
         const claimed = claimAdReward(synced, sessionId, offer, now, ctx.config.economy);
@@ -85,6 +94,8 @@ export function registerAdsPostbackRoutes(app: FastifyInstance, ctx: AppContext)
         requestId: request.id,
         userId: account.id,
         sessionId,
+        rewardId,
+        correlated: session.correlated,
         sku: offer.sku,
         granted: meta.granted
       });
@@ -95,6 +106,8 @@ export function registerAdsPostbackRoutes(app: FastifyInstance, ctx: AppContext)
         requestId: request.id,
         userId: account0.id,
         sessionId,
+        rewardId,
+        correlated: session.correlated,
         code: error instanceof AppError ? error.code : 'INTERNAL',
         message: error instanceof Error ? error.message : String(error)
       });

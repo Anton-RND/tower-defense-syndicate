@@ -10,7 +10,7 @@
 
 Проект делается под ВКонтакте (мини-приложение), но ядро от площадки не зависит: весь баланс,
 экономика и разрешение боёв живут на сервере, а касания ВК-API изолированы в тонких обёртках —
-две на фронте (`VkPaymentManager`, `VkSocialManager`) и несколько на сервере (`vk.push`,
+три на фронте (`VkAdsManager`, `VkPaymentManager`, `VkSocialManager`) и несколько на сервере (`vk.push`,
 `vk.adapter`, `vk.signature`, `provider.vk`).
 
 ## Статус
@@ -71,7 +71,7 @@ server/src/
                 notification, payment, social, auth, user
   http/         Fastify: app.ts (маршруты, /health, стенды), auth.ts, routes/*.ts
   lib/          errors, logger, rng, scheduler
-frontend/src/vk/  тонкие обёртки площадки: VkPaymentManager, VkSocialManager
+frontend/src/vk/  тонкие обёртки площадки: VkAdsManager, VkPaymentManager, VkSocialManager
 ```
 
 Три инварианта, на которых всё это держится:

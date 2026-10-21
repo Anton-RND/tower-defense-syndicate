@@ -16,6 +16,11 @@ import { testConfig } from './fixtures.js';
  * площадки открывается из query-параметров (та же схема mini_app, что и у
  * initData), выдача происходит ровно один раз, а повторная доставка и сгоревшая
  * сессия отвечают «принято» с логом вместо вечного ретрая площадки.
+ *
+ * Отдельный блок — двойная корреляция postback'а: `reward_id` площадки не обязан
+ * быть нашим id сессии (мост 3.0.2 вообще не передаёт приложению свой
+ * идентификатор), поэтому тесты держат оба режима — строгий по совпадению и по
+ * владельцу — и требуют, чтобы выбранный режим был виден в логе.
  */
 
 const SECRET = 'test-vk-secret';
@@ -36,6 +41,32 @@ function openStand(env: Record<string, string> = {}, overrides: Record<string, u
     opened.push(app);
     return { app, ctx, config };
   });
+}
+
+/**
+ * Шпион логгера. Постбэк отвечает площадке «принято» почти во всех случаях, а
+ * значит единственный способ увидеть, ЧТО именно сервер решил и ПОЧЕМУ — записи.
+ * Без них тест проверял бы только код 200 и молча принимал любую выдачу.
+ */
+function recordingLogger(): {
+  logger: unknown;
+  entries: Array<{ level: string; msg: string; meta: Record<string, unknown> }>;
+} {
+  const entries: Array<{ level: string; msg: string; meta: Record<string, unknown> }> = [];
+  const push = (level: string) => (msg: string, meta: Record<string, unknown> = {}): void => {
+    entries.push({ level, msg, meta });
+  };
+  return {
+    logger: { debug: push('debug'), info: push('info'), warn: push('warn'), error: push('error') },
+    entries
+  };
+}
+
+function lastEntry(
+  entries: Array<{ msg: string; meta: Record<string, unknown> }>,
+  msg: string
+): { meta: Record<string, unknown> } | null {
+  return [...entries].reverse().find((entry) => entry.msg === msg) ?? null;
 }
 
 async function createPlayer(ctx: AppContext, socialId = '12345'): Promise<string> {
@@ -83,7 +114,8 @@ afterEach(async () => {
 
 describe('callbacks/vk/ads: награда выходит только под валидной подписью', () => {
   it('GET-постбэк выдаёт награду ровно один раз; повтор — «принято» без повторной выдачи', async () => {
-    const { app, ctx } = await openStand();
+    const logs = recordingLogger();
+    const { app, ctx } = await openStand({}, { logger: logs.logger });
     const userId = await createPlayer(ctx);
     const sessionId = await openSession(ctx, userId, 'ad_asterium_10');
 
@@ -95,6 +127,8 @@ describe('callbacks/vk/ads: награда выходит только под в
     expect(afterFirst?.materials.asterium.earned).toBe(10);
     expect(afterFirst?.ads.claimed).toBe(1);
     expect(afterFirst?.ads.pending).toBeNull();
+    // Совпавший reward_id — строгий режим: подпись назвала именно эту сессию.
+    expect(lastEntry(logs.entries, 'ad_postback_claimed')?.meta.correlated).toBe('reward_id');
 
     // Повторная доставка той же подписи площадкой: 200 (ретрай остановлен),
     // награда и счётчик не двигаются ни на единицу.
@@ -125,10 +159,83 @@ describe('callbacks/vk/ads: награда выходит только под в
     expect(account?.ads.pending).not.toBeNull();
   });
 
-  it('валидная подпись, но нет reward_id → 400', async () => {
+  it('валидная подпись, но нет user_id → 400', async () => {
     const { app } = await openStand();
-    const response = await get(app, signedQuery({ user_id: '12345' }));
+    const response = await get(app, signedQuery({ reward_id: 'anything' }));
     expect(response.statusCode).toBe(400);
+  });
+
+  it('чужой reward_id (площадка не знает наших id) → награда по владельцу, режим в логе', async () => {
+    const logs = recordingLogger();
+    const { app, ctx } = await openStand({}, { logger: logs.logger });
+    const userId = await createPlayer(ctx, '222');
+    await openSession(ctx, userId, 'ad_asterium_10');
+
+    // vk-bridge 3.0.2 не даёт приложению передать площадке свой идентификатор
+    // показа (ShowNativeAdsRequest = ad_format + use_waterfall), поэтому в
+    // постбэке прийдёт id площадки, и строгое сравнение с id сессии невозможно.
+    const response = await get(app, signedQuery({ user_id: '222', reward_id: 'vk-reward-77' }));
+    expect(response.statusCode).toBe(200);
+
+    const after = await ctx.users.findById(userId);
+    expect(after?.materials.asterium.earned).toBe(10);
+    expect(after?.ads.claimed).toBe(1);
+    expect(after?.ads.pending).toBeNull();
+    expect(lastEntry(logs.entries, 'ad_postback_claimed')?.meta.correlated).toBe('owner');
+  });
+
+  it('reward_id отсутствует вовсе → награда по владельцу, а не 400', async () => {
+    const logs = recordingLogger();
+    const { app, ctx } = await openStand({}, { logger: logs.logger });
+    const userId = await createPlayer(ctx, '333');
+    await openSession(ctx, userId, 'ad_chips_2');
+
+    const response = await get(app, signedQuery({ user_id: '333' }));
+    expect(response.statusCode).toBe(200);
+
+    const after = await ctx.users.findById(userId);
+    expect(after?.junk.chips).toBe(2);
+    expect(lastEntry(logs.entries, 'ad_postback_claimed')?.meta.correlated).toBe('owner');
+  });
+
+  it('режим по владельцу не воскрешает сгоревшую сессию — домен остаётся истиной', async () => {
+    let clock = new Date('2026-10-20T00:00:00.000Z');
+    const logs = recordingLogger();
+    const { app, ctx } = await openStand({}, { now: () => clock, logger: logs.logger });
+    const userId = await createPlayer(ctx, '444');
+    const offer = getAdOffer('ad_asterium_10');
+    if (!offer) throw new Error('нет оффера');
+    await ctx.users.transact(userId, (current) => {
+      const opened = openAdSession(current, offer, clock, ctx.config.economy, ctx.idFactory);
+      return opened.account;
+    });
+    const sessionId = (await ctx.users.findById(userId))?.ads.pending?.id;
+    if (!sessionId) throw new Error('сессия не открылась');
+
+    clock = new Date(clock.getTime() + 4 * 60_000);
+    const response = await get(app, signedQuery({ user_id: '444' }));
+    expect(response.statusCode).toBe(200);
+
+    const after = await ctx.users.findById(userId);
+    expect(after?.materials.asterium.earned).toBe(0);
+    expect(after?.ads.claimed).toBe(0);
+    expect(after?.ads.pending?.id).toBe(sessionId);
+    const dropped = lastEntry(logs.entries, 'ad_postback_dropped');
+    expect(dropped?.meta.code).toBe('AD_SESSION_EXPIRED');
+    expect(dropped?.meta.correlated).toBe('owner');
+  });
+
+  it('пустой слот и чужой reward_id → «принято» без выдачи и с причиной в логе', async () => {
+    const logs = recordingLogger();
+    const { app, ctx } = await openStand({}, { logger: logs.logger });
+    const userId = await createPlayer(ctx, '666');
+
+    const response = await get(app, signedQuery({ user_id: '666', reward_id: 'vk-reward-1' }));
+    expect(response.statusCode).toBe(200);
+
+    const after = await ctx.users.findById(userId);
+    expect(after?.ads.claimed).toBe(0);
+    expect(lastEntry(logs.entries, 'ad_postback_ignored')?.meta.reason).toBe('no_pending_session');
   });
 
   it('неизвестный игрок принимается «по-доброму»: 200 и причина в логе', async () => {

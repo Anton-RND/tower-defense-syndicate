@@ -175,36 +175,42 @@ if (config.vk.secretKey.length > 0) {
 // ─── 2в. Рекламный постбэк: круг по тому же пути, что пройдёт площадка ────────
 // `/callbacks/vk/ads` — единственное место, где просмотр ролика становится
 // наградой, и подпись у него схема mini_app (тот же прод-код, что у initData).
-// Круг повторяет ОБА транспорта маршрута (query для GET, тело для POST) и оба
-// шага после подписи: разбор `user_id`/`reward_id`. Расхождение здесь молча
-// стоит игрокам наград, а замечать его дешевле до ADS_POSTBACK_READY=true.
+// Круг повторяет ОБА транспорта маршрута (query для GET, тело для POST) и ОБА
+// формата постбэка: с `reward_id` площадки и без него — мост 3.0.2 не передаёт
+// приложению свой идентификатор, поэтому второй формат основной. Расхождение
+// здесь молча стоит игрокам наград, а замечать его дешевле ADS_POSTBACK_READY.
 if (config.vk.secretKey.length > 0) {
-  const postbackParams: VkParams = { user_id: 'doctor', reward_id: 'doctor-session' };
-  const postbackSign = signVkMiniApp(postbackParams, config.vk.appId, config.vk.secretKey);
-  const signed = { ...postbackParams, sign: postbackSign };
-  const transports: Array<[string, VkParams]> = [
-    ['query', parseVkParams(new URLSearchParams(signed).toString())],
-    ['body', toVkParams(signed)]
+  const shapes: Array<{ label: string; params: VkParams }> = [
+    { label: 'с reward_id', params: { user_id: 'doctor', reward_id: 'platform-reward-1' } },
+    { label: 'без reward_id', params: { user_id: 'doctor' } }
   ];
-  for (const [name, inbound] of transports) {
-    const verified = verifyVkSignature(inbound, {
-      appId: config.vk.appId,
-      secretKey: config.vk.secretKey
-    });
-    const parsed = verified ? parseVkAdPostback(inbound) : null;
-    if (!verified) {
-      bad(`vk:ads постбэк (${name})`, 'круговая подпись mini_app не сошлась — награду не получит никто');
-    } else if (
-      !parsed ||
-      parsed.userId !== postbackParams.user_id ||
-      parsed.sessionId !== postbackParams.reward_id
-    ) {
-      bad(
-        `vk:ads постбэк (${name})`,
-        `user_id/reward_id потерялись в транспорте: ${JSON.stringify(parsed)}`
-      );
-    } else {
-      ok(`vk:ads постбэк (${name})`, `схема=${verified.scheme}`);
+  for (const shape of shapes) {
+    const signed: VkParams = {
+      ...shape.params,
+      sign: signVkMiniApp(shape.params, config.vk.appId, config.vk.secretKey)
+    };
+    const transports: Array<[string, VkParams]> = [
+      ['query', parseVkParams(new URLSearchParams(signed).toString())],
+      ['body', toVkParams(signed)]
+    ];
+    for (const [name, inbound] of transports) {
+      const verified = verifyVkSignature(inbound, {
+        appId: config.vk.appId,
+        secretKey: config.vk.secretKey
+      });
+      const parsed = verified ? parseVkAdPostback(inbound) : null;
+      const label = `vk:ads постбэк ${shape.label} (${name})`;
+      if (!verified) {
+        bad(label, 'круговая подпись mini_app не сошлась — награду не получит никто');
+      } else if (
+        !parsed ||
+        parsed.userId !== shape.params.user_id ||
+        parsed.rewardId !== (shape.params.reward_id ?? null)
+      ) {
+        bad(label, `user_id/reward_id потерялись в транспорте: ${JSON.stringify(parsed)}`);
+      } else {
+        ok(label, `схема=${verified.scheme}`);
+      }
     }
   }
   if (config.economy.limits.ads.enabled && !config.adsPostbackReady) {
