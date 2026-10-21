@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   REFERRAL_REWARD_ASTERIUM,
   REFERRAL_REWARD_ENERGY,
-  applyReferralOnSignup,
+  REFERRAL_SETTLE_WINDOW_MS,
   bindReferral,
   creditInviter,
+  markReferralSettled,
+  needsReferralSettle,
   parseReferral,
   referralRef
 } from '../src/modules/social/referral.js';
@@ -144,35 +146,55 @@ describe('social/referral: награда пригласившему', () => {
   });
 });
 
-describe('social/referral: сборка на регистрации', () => {
-  it('привязывает новичка и награждает пригласившего за один проход', () => {
-    const inviter = withResources(newAccount(config, T0, '300'), { energy: 0 });
-    const invitee = newAccount(config, addMs(T0, 1000), '301');
+describe('social/referral: догон награды (два документа, одна транзакция каждый)', () => {
+  it('требует догона ровно когда связка есть, а отметки нет', () => {
+    const invitee = newAccount(config, T0, '301');
+    const bound = bindReferral(invitee, 'inv_inviter-000001', T0);
 
-    const binding = applyReferralOnSignup(invitee, referralRef(inviter.id), inviter, addMs(T0, 1000), rules);
-    expect(binding.invitee.referral.invitedBy).toBe(inviter.id);
-    expect(binding.inviter?.credited).toBe(true);
-    expect(binding.inviter?.account.referral.invited).toContain(binding.invitee.id);
-    expect(binding.inviter?.drafts.length).toBeGreaterThan(0);
+    // Только что привязан, но второй документ не тронут — падение процесса между
+    // записями: единственный случай, который этот механизм и закрывает.
+    expect(needsReferralSettle(bound, addMs(T0, 5_000))).toBe(true);
+
+    const settled = markReferralSettled(bound, addMs(T0, 5_000));
+    expect(settled.referral.settledAt).toEqual(addMs(T0, 5_000));
+    expect(needsReferralSettle(settled, addMs(T0, 6_000))).toBe(false);
   });
 
-  it('не награждает, если пригласивший не найден (ref на удалённый аккаунт)', () => {
-    const invitee = newAccount(config, T0, '302');
-    const binding = applyReferralOnSignup(invitee, 'inv_ghost-000001', null, T0, rules);
-    expect(binding.invitee.referral.invitedBy).toBe('ghost-000001');
-    expect(binding.inviter).toBeNull();
+  it('не трогает ни чужой документ, ни привязанного давным-давно', () => {
+    const fresh = newAccount(config, T0, '302');
+    // Не привязан → догонять нечего, и отметку ставить не надо.
+    expect(needsReferralSettle(fresh, T0)).toBe(false);
+
+    const bound = bindReferral(fresh, 'inv_inviter-000002', T0);
+    // За пределами окна «забытая» связка означает уже другое (ручная правка,
+    // перенос базы) и молча доначислять астерий по ней нельзя.
+    expect(needsReferralSettle(bound, addMs(T0, REFERRAL_SETTLE_WINDOW_MS + 1_000))).toBe(false);
+    expect(needsReferralSettle(bound, addMs(T0, REFERRAL_SETTLE_WINDOW_MS - 1_000))).toBe(true);
+
+    // Чистая функция: входной документ не мутируется.
+    expect(fresh.referral.settledAt).toBeNull();
+    expect(markReferralSettled(bound, T0).referral.invitedBy).toBe(bound.referral.invitedBy);
+  });
+
+  it('отметка ставится один раз и не перетирается повторным прогоном', () => {
+    const bound = bindReferral(newAccount(config, T0, '303'), 'inv_inviter-000003', T0);
+    const first = markReferralSettled(bound, T0);
+    const second = markReferralSettled(first, addMs(T0, 3_600_000));
+    expect(second).toBe(first);
+    expect(second.referral.settledAt).toEqual(T0);
   });
 
   it('астериев падает в earned, а не в purchased', () => {
-    const inviter = withAsterium(withResources(newAccount(config, T0, '303'), { energy: 0 }), 100, 0);
+    const inviter = withAsterium(withResources(newAccount(config, T0, '304'), { energy: 0 }), 100, 0);
     const result = creditInviter(inviter, 'invitee-9', T0, rules);
     expect(result.account.materials.asterium).toEqual({ purchased: 100, earned: REFERRAL_REWARD_ASTERIUM });
   });
 
   it('referral пуст у нового аккаунта и его копия изолирована', () => {
-    const account = newAccount(config, T0, '304');
+    const account = newAccount(config, T0, '305');
     expect(account.referral).toEqual({
       invitedBy: null,
+      settledAt: null,
       creditedAt: null,
       day: '2026-10-18',
       count: 0,

@@ -1,5 +1,4 @@
 import type { EconomyConfig } from '../../config/env.js';
-import { AppError, ErrorCodes } from '../../lib/errors.js';
 import { dayKey } from '../economy/energy.js';
 import { credit, asterium, resource } from '../economy/wallet.js';
 import { makeIdempotencyKey, type LedgerDraft } from '../ledger/ledger.types.js';
@@ -164,50 +163,44 @@ export function creditInviter(
 }
 
 /**
- * Точка сборки для HTTP-слоя: привязка при регистрации + награда пригласившему.
+ * Как долго новичок с незакрытой наградой считается подлежащим догону.
  *
- * Возвращает черновики для ЖУРНАЛА пригласившего и НОВЫЙ документ приглашённого.
- * Порядок обязателен: сначала приглашённый принимает связку (это его единственный
- * шанс), затем пригласивший получает награду. Наоборот — провал записи приглашённого
- * оставил бы выданную награду без основания.
+ * Окно нужно, а не вредит: привязка ставится один раз при рождении аккаунта,
+ * поэтому «забытая» награда — это всегда падение процесса между двумя записями,
+ * а падение видно по свежему документу. Спустя неделю этот же признак означает
+ * уже что-то другое (ручная правка, перенос базы), и молча доначислять астерий
+ * по такому признаку нельзя — только Support-инструментом, по тикету.
  */
-export interface ReferralBinding {
-  invitee: UserAccount;
-  inviter: ReferralCredit | null;
+export const REFERRAL_SETTLE_WINDOW_MS = 7 * 24 * 3_600_000;
+
+/**
+ * Нужен ли догон награды: связка есть, обработка не завершена, новичок ещё в окне.
+ *
+ * Чистый предикат, чтобы HTTP-слой решал это по документу, а не по памяти о
+ * предыдущем запросе: процесс мог упасть, перезапуститься или держать второго
+ * инстанс за балансировщиком.
+ */
+export function needsReferralSettle(
+  invitee: UserAccount,
+  now: Date,
+  windowMs: number = REFERRAL_SETTLE_WINDOW_MS
+): boolean {
+  if (!invitee.referral.invitedBy) return false;
+  if (invitee.referral.settledAt) return false;
+  return now.getTime() - invitee.createdAt.getTime() <= windowMs;
 }
 
 /**
- * Точка сборки для HTTP-слоя: привязка при регистрации + награда пригласившему.
+ * Отметка «связка обработана до конца» — ставится при ЛЮБОМ исходе, включая отказ.
  *
- * Вызывается ОДИН раз — в обработчике входа, когда аккаунт только что создан
- * (`getOrCreate` вернул `created: true`), а `ref` взят из подписанных initData.
- * Порядок обязателен: сначала приглашённый принимает связку (это его единственный
- * шанс — на следующем входе `invitedBy` уже будет заполнен и bindReferral промолчит),
- * затем пригласивший получает награду. Наоборот — провал записи приглашённого оставил
- * бы выданную награду без основания.
+ * Смысл именно в отказах: без отметки лимит приглашений, самоприглашение и
+ * удалённый пригласивший переигрывались бы на каждом входе, а лог `referral_bind`
+ * тоннал бы строками «нет награды» от одного и того же новичка. Отметка не значит
+ * «награда вышла» — она значит «больше никто этого не пытается».
  */
-export function applyReferralOnSignup(
-  invitee: UserAccount,
-  ref: string | null | undefined,
-  inviter: UserAccount | null,
-  now: Date,
-  config: EconomyConfig
-): ReferralBinding {
-  const bound = bindReferral(invitee, ref, now);
-  const inviterId = bound.referral.invitedBy;
-  if (!inviter || !inviterId || inviter.id !== inviterId) return { invitee: bound, inviter: null };
-  return { invitee: bound, inviter: creditInviter(inviter, bound.id, now, config) };
-}
-
-/** Причина отказа награды → HTTP-ошибка (409 на «уже/сам», 429 на лимит). */
-export function referralFailure(credit: ReferralCredit): AppError | null {
-  if (credit.credited) return null;
-  if (credit.reason === 'limit') {
-    return new AppError(ErrorCodes.RATE_LIMITED, 429, 'Суточный лимит приглашений исчерпан', {
-      reason: credit.reason
-    });
-  }
-  return null;
+export function markReferralSettled(invitee: UserAccount, now: Date): UserAccount {
+  if (invitee.referral.settledAt) return invitee;
+  return { ...invitee, referral: { ...invitee.referral, settledAt: now } };
 }
 
 /**

@@ -62,10 +62,18 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
-/** `app.get('/v1/x')` и `app.post<{ Params: ... }>('/v1/y/:id')` → список маршрутов. */
+/**
+ * `app.get('/v1/x')` и `app.post<{ Params: ... }>('/v1/y/:id')` → список маршрутов.
+ *
+ * Каталог `routes/` — не единственное место, где регистрируется маршрут:
+ * `/health`, `/v1/config` и обе стендовые страницы живут в самом `app.ts`.
+ * Не прочти мы его, витрина, зовущая `/v1/config`, получила бы красный тест при
+ * полностью работающем сервере — а такой тест хуже отсутствия теста.
+ */
 function collectServerRoutes(): RoutePattern[] {
   const routes: RoutePattern[] = [];
-  for (const source of readTsFiles(ROUTES_DIR)) {
+  const sources = [...readTsFiles(ROUTES_DIR), stripComments(readFileSync(join(here, '../src/http/app.ts'), 'utf8'))];
+  for (const source of sources) {
     for (const match of source.matchAll(/app\.(get|post|put|patch|delete)(?:<[^>]*>)?\(\s*'([^']+)'/g)) {
       const raw = match[2] ?? '';
       routes.push({ method: (match[1] ?? '').toUpperCase(), segments: raw.split('/').filter(Boolean), raw });
@@ -115,6 +123,41 @@ function matches(route: RoutePattern, clientSegments: string[]): boolean {
 const serverRoutes = collectServerRoutes();
 const clientPaths = collectClientPaths(readTsFiles(FRONTEND_DIR));
 
+/**
+ * Пути, которые отправляет витрина полигона (`server/src/http/play.html`).
+ *
+ * HTML-страница — такой же клиент контракта, как `frontend/src`, и её адреса
+ * ломаются ровно так же: переименуй сервер маршрут, и витрина получит 404
+ * с формулировкой «Маршрут не найден», которую никто не свяжет с правкой в
+ * `routes/`. Проверяются только литералы первых двух аргументов `api(method, path)`:
+ * склеенные хвосты (`'/v1/market/lots/' + id + '/cancel'`) даются как префикс и
+ * требуют, чтобы за ним стоял хотя бы один зарегистрированный маршрут.
+ */
+function collectPlayPaths(): string[] {
+  const source = stripComments(readFileSync(join(here, '../src/http/play.html'), 'utf8'));
+  const paths = new Set<string>();
+  for (const match of source.matchAll(/\bapi\(\s*'(GET|POST|PUT|PATCH|DELETE)'\s*,\s*'([^']*)'/g)) {
+    const value = (match[2] ?? '').split('?')[0] ?? '';
+    if (value.startsWith('/v1/')) paths.add(value);
+  }
+  return [...paths];
+}
+
+function coveredByServerRoute(path: string): boolean {
+  const segments = path.split('/').filter(Boolean);
+  if (path.endsWith('/')) {
+    // Префикс склеенного URL: достаточно, что маршрут начинается этими сегментами.
+    return serverRoutes.some(
+      (route) =>
+        route.segments.length >= segments.length &&
+        segments.every((segment, index) => route.segments[index] === segment)
+    );
+  }
+  return serverRoutes.some((route) => matches(route, segments));
+}
+
+const playPaths = collectPlayPaths();
+
 describe('http/frontend-contract: пути фронта зарегистрированы на сервере', () => {
   it('обе стороны действительно найдены', () => {
     // Пустой вход — тихий зелёный тест. Проверяем объём, прежде чем верить выводу.
@@ -150,5 +193,54 @@ describe('http/frontend-contract: пути фронта зарегистриро
     // закрыт DEV_SIGNER_ENABLED и в production его нет — появление этого пути
     // во фронте означает, что кто-то снова сделал из рекламы принтер энергии.
     expect(clientPaths.some((path) => path.startsWith('/v1/ads/claim'))).toBe(false);
+  });
+});
+
+describe('http/frontend-contract: витрина полигона (/play) ходит только в живые маршруты', () => {
+  it('страница найдена и путей в ней достаточно, чтобы верить выводу', () => {
+    // Пустой вход — тихий зелёный тест: регулярка могла разойтись со стилем вызовов.
+    expect(playPaths.length, 'пути полигона').toBeGreaterThan(10);
+  });
+
+  it('каждый путь, который строит полигон, имеет маршрут на сервере', () => {
+    const unmatched = playPaths.filter((path) => !coveredByServerRoute(path));
+    expect(unmatched, `не зарегистрированы: ${unmatched.join(', ')}`).toEqual([]);
+  });
+
+  it('боевой вход VK подключён к витрине, а не только dev-login', () => {
+    // Ради этого пункта и затеян файл: `play.html` годами звал только
+    // `/v1/auth/dev-login`, и серверный `/v1/auth/vk/init-data` оставался
+    // единственной непроверяемой петлёй входа. Исчезновение этого пути из
+    // HTML — сигнал, что витрину откатили к отладочному входу.
+    expect(playPaths).toContain('/v1/auth/vk/init-data');
+    expect(playPaths).toContain('/v1/auth/dev-login');
+    expect(serverRoutes.some((route) => route.raw === '/v1/auth/vk/init-data')).toBe(true);
+  });
+
+  it('генератор initData существует и закрыт тем же флагом, что dev-login', () => {
+    expect(serverRoutes.some((route) => route.raw === '/v1/dev/vk/sign' && route.method === 'POST')).toBe(true);
+  });
+
+  it('режим входа витрина узнаёт у сервера, а не угадывает', () => {
+    expect(playPaths).toContain('/v1/config');
+  });
+});
+
+describe('http/frontend-contract: боевой клиент (frontend/src) подключён к входу', () => {
+  it('адаптер входа существует и зовёт боевой маршрут, а не только dev-login', () => {
+    // Смысл пункта: три адаптера фронта (реклама, платежи, шеринг) ходят в сервер
+    // с токеном. Пока `VkAuthManager` не появился, этот токен было неоткуда взять
+    // — `/v1/auth/vk/init-data` оставался единственной петлёй входа, не
+    // подключённой к фронтенду. Исчезновение пути отсюда = регрессия.
+    expect(clientPaths).toContain('/v1/auth/vk/init-data');
+    expect(clientPaths).toContain('/v1/config');
+    expect(clientPaths).toContain('/v1/me');
+  });
+
+  it('фронт не выдумывает маршруты входа, которых нет на сервере', () => {
+    // `/v1/auth/vk/sign` — генератор стенда (закрыт DEV_SIGNER_ENABLED): если
+    // боевой клиент начнёт им пользоваться, на проде он получит 403 вместо входа.
+    expect(clientPaths.some((path) => path.startsWith('/v1/dev/'))).toBe(false);
+    expect(serverRoutes.some((route) => route.raw === '/v1/auth/vk/init-data' && route.method === 'POST')).toBe(true);
   });
 });

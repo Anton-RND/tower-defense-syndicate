@@ -46,6 +46,17 @@ export function normalizeRequestId(raw: string | string[] | undefined): string |
 }
 
 /**
+ * Алфавит и длина адреса, приемлемые из чужого `X-Forwarded-For`.
+ *
+ * Проверка нужна не ради «валидности IP» (мы адрес не маршрутизируем, а болеем
+ * по нему), а ради двух других вещей: ключ бакета обязан остаться короткой
+ * строкой (иначе 64 КБ тела заголовка превращаются в 64 КБ на каждый адрес в
+ * карте лимитера), и в нём не должно быть разделителей, способных сломать
+ * разбор логов агрегатором.
+ */
+const CLIENT_IP_SHAPE = /^[0-9a-fA-F.:_[\]-]{1,64}$/;
+
+/**
  * Адрес клиента.
  *
  * `X-Forwarded-For` читается ТОЛЬКО когда оператор явно сказал, что сверху стоит
@@ -62,25 +73,9 @@ export function clientIpOf(request: FastifyRequest, trustForwardedFor: boolean):
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (!value) return request.ip;
   const first = value.split(',')[0]?.trim();
-  return first && first.length > 0 ? first : request.ip;
+  return first && CLIENT_IP_SHAPE.test(first) ? first : request.ip;
 }
 
-/**
- * Content-Security-Policy витрины.
- *
- * `'unsafe-inline'` в script-src и style-src — не забывчивость, а следствие
- * принципа `play.html`: один файл, vanilla JS, никакой сборки и ни одной
- * рантайм-зависимости. Весь скрипт инлайн, а nonce для одного файла, отдаваемого
- * без кэша, защиты не добавляет. Поэтому настоящая ценность этого слоя — не
- * inline-сдерживание, а `object-src 'none'`, `base-uri 'none'`,
- * `form-action 'self'` и главное `frame-ancestors`.
- *
- * `frame-ancestors` обязано содержать источники WebView. Шаблонный
- * `X-Frame-Options: DENY`, которым пестрят примеры настройки, здесь ВЫКЛЮЧИЛ БЫ
- * ИГРУ: ВК грузит приложение в iframe, и отказ во встраивании равен отказу во
- * входе. Сам `X-Frame-Options` не отправляется вовсе — он не понимает списков
- * источников, и один провайдер с нестандартным поддоменом убил бы вход молча.
- */
 /**
  * Content-Security-Policy витрины.
  *

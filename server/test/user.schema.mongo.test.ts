@@ -215,7 +215,7 @@ describe('mongo.model: маппинг инвентаря, хлама, метал
     expect(account.pvp.bestRating).toBe(PVP_RATING_START);
     expect(account.pvp.battles).toBe(0);
     expect(account.pvp.lastBattleAt).toBeNull();
-    expect(account.referral).toEqual({ invitedBy: null, creditedAt: null, day: '2026-10-18', count: 0, invited: [] });
+    expect(account.referral).toEqual({ invitedBy: null, settledAt: null, creditedAt: null, day: '2026-10-18', count: 0, invited: [] });
     // Документы до Части 1/2: нет заказов и клана — пустой список и null, а не падение.
     expect(account.orders).toEqual([]);
     expect(account.clanId).toBeNull();

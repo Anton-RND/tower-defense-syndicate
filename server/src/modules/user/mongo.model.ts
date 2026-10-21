@@ -118,6 +118,8 @@ interface PvpDoc {
 /** Реферальная связка. `invited` — короткий список: награда одна на человека, история длиннее не нужна. */
 interface ReferralDoc {
   invitedBy: string | null;
+  /** Когда связка обработана до конца; null — награда ещё не дошла до пригласившего. */
+  settledAt: Date | null;
   creditedAt: Date | null;
   day: string;
   count: number;
@@ -421,6 +423,7 @@ const pvpSchema = new Schema<PvpDoc>(
 const referralSchema = new Schema<ReferralDoc>(
   {
     invitedBy: { type: String, default: null },
+    settledAt: { type: Date, default: null },
     creditedAt: { type: Date, default: null },
     day: { type: String, required: true },
     count: { type: Number, required: true, default: 0, min: 0 },
@@ -741,8 +744,13 @@ function docDay(value: Date | string | undefined | null): string {
   return Number.isNaN(date.getTime()) ? '1970-01-01' : date.toISOString().slice(0, 10);
 }
 
-function referralFromDoc(doc: ReferralDoc | undefined, fallbackDay: string): ReferralState {  return {
+function referralFromDoc(doc: ReferralDoc | undefined, fallbackDay: string): ReferralState {
+  return {
     invitedBy: doc?.invitedBy ?? null,
+    // Миграция по чтению: документы до поля `settledAt` читаются как «не обработано»,
+    // но догон награды ограничен возрастом аккаунта (referral.REFERRAL_SETTLE_WINDOW_MS),
+    // поэтому старый документ не превращается в бесконечный повтор награды.
+    settledAt: doc?.settledAt ? new Date(doc.settledAt) : null,
     creditedAt: doc?.creditedAt ? new Date(doc.creditedAt) : null,
     day: doc?.day ?? fallbackDay,
     count: doc?.count ?? 0,

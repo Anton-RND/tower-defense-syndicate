@@ -5,6 +5,12 @@ import { CRAFT_TECH_IDS, type CraftTechId } from '../../config/materials.js';
 import { JUNK_IDS, METAL_IDS, type JunkId, type MetalId } from '../../config/workshop.js';
 import { validationError } from '../../lib/errors.js';
 import {
+  SIGN_KEYS,
+  VkSignatureScheme,
+  signVkParams,
+  type VkParams
+} from '../../modules/auth/vk.signature.js';
+import {
   asterium,
   credit,
   junk as junkTarget,
@@ -18,7 +24,9 @@ import { confirmPayment, refundPayment } from '../../modules/payment/commit.js';
 import { createAccount } from '../../modules/user/user.types.js';
 import { accountOf, assertDevRoutes, authHook, claimsOf } from '../auth.js';
 import type { AppContext } from '../context.js';
-import { accountAction, bodyOf, intOf, optionalStringOf, stringOf, viewOf } from '../helpers.js';
+import { accountAction, bodyOf, intOf, optionalIntOf, optionalStringOf, stringOf, viewOf } from '../helpers.js';
+
+const SCHEMES = [VkSignatureScheme.MINI_APP, VkSignatureScheme.LAUNCH_PARAMS] as const;
 
 /**
  * Отладочные маршруты стенда. ВСЕ закрыты `assertDevRoutes`: в production
@@ -37,6 +45,148 @@ import { accountAction, bodyOf, intOf, optionalStringOf, stringOf, viewOf } from
 export function registerDevRoutes(app: FastifyInstance, ctx: AppContext): void {
   const auth = { preHandler: authHook(ctx) };
   const deps = { users: ctx.users, ledger: ctx.ledger, idFactory: ctx.idFactory };
+
+  /**
+   * Генератор подписанной initData: `POST /v1/dev/vk/sign`.
+   *
+   * ЗАЧЕМ. Боевой вход (`/v1/auth/vk/init-data`) непроверяем без координат
+   * площадки: локальный стенд не имеет ни App ID, ни Secret Key, и вся цепочка
+   * «подписал WebView → проверил сервер → родился аккаунт → привязался реферал»
+   * осталась бы неописанной ни одним тестом и ни одной кнопкой. Секрет known —
+   * значит initData можно собрать самому, тем же кодом, которым её проверяют
+   * (`signVkParams` из vk.signature.ts), а не второй формулой, которая разойдётся
+   * с первой в самый неудобный момент.
+   *
+   * КООРДИНАТЫ. По умолчанию берутся из окружения (`VK_APP_ID`/`VK_SECRET_KEY`),
+   * поэтому сценарий «поднял стенд с тестовыми ключами → сгенерировал строку →
+   * вошёл через боевой маршрут» работает без тела запроса. `appId`/`secretKey`
+   * можно передать явно — так проверяются негативные векторы (чужой секрет,
+   * чужой app_id, устаревший `ts` через `ageSec`).
+   *
+   * БЕЗОПАСНОСТЬ. Маршрут закрыт `assertDevRoutes` и гасится в production на
+   * уровне конфига (env.ts:225): снаружи он не печатает ничего. Бюджет
+   * `guard('auth')` на нём свой, а не игровой: запросы к нему идут до того, как
+   * у клиента появится токен, и лимитер обязан считать их в том же ведре, что и
+   * остальные попытки входа.
+   */
+  app.post('/v1/dev/vk/sign', { preHandler: ctx.security.guard('auth') }, async (request) => {
+    assertDevRoutes(ctx);
+    const body = bodyOf(request);
+
+    const schemeRaw = optionalStringOf(body, 'scheme', 32) ?? VkSignatureScheme.MINI_APP;
+    if (!(SCHEMES as readonly string[]).includes(schemeRaw)) {
+      throw validationError(`Поле «scheme» должно быть одним из: ${SCHEMES.join(', ')}`, {
+        field: 'scheme',
+        allowed: SCHEMES
+      });
+    }
+    const scheme = schemeRaw as VkSignatureScheme;
+
+    const signKeyRaw = optionalStringOf(body, 'signKey', 8) ?? 'sign';
+    if (!(SIGN_KEYS as readonly string[]).includes(signKeyRaw)) {
+      throw validationError(`Поле «signKey» должно быть одним из: ${SIGN_KEYS.join(', ')}`, {
+        field: 'signKey',
+        allowed: SIGN_KEYS
+      });
+    }
+    // `hash` по документации площадкой не подписывается, но часть переходов из
+    // шеринга приходит так, будто он обычный параметр, и верификатор перебирает
+    // обе формы (VkHashPolicy). Генератор обязан уметь выдать вторую: иначе эта
+    // ветка непроверяема ни тестом, ни смоком, ни doctor'ом.
+    const signHash = body['signHash'] === true;
+
+    const appId = optionalIntOf(body, 'appId', { min: 1 }) ?? ctx.config.vk.appId;
+    if (appId <= 0) {
+      throw validationError('Не задан App ID: передайте appId в теле или VK_APP_ID в окружении', { field: 'appId' });
+    }
+    const secretKey = optionalStringOf(body, 'secretKey', 256) ?? ctx.config.vk.secretKey;
+    if (secretKey.length === 0) {
+      throw validationError('Не задан секрет: передайте secretKey в теле или VK_SECRET_KEY в окружении', {
+        field: 'secretKey'
+      });
+    }
+
+    const socialId = optionalStringOf(body, 'socialId', 32) ?? '1';
+    if (!/^\d+$/.test(socialId) || socialId === '0') {
+      throw validationError('Поле «socialId» обязано быть числовым id пользователя ВКонтакте', { field: 'socialId' });
+    }
+    const groupId = optionalStringOf(body, 'groupId', 32);
+    const ref = optionalStringOf(body, 'ref', 128);
+    // Возраст подписи, сек: 0 — свежая. Нужен для негативных векторов (устаревшая
+    // initData обязана давать EXPIRED_INIT_DATA, а не 401 «подпись не совпала»).
+    const ageSec = optionalIntOf(body, 'ageSec', { min: 0, max: 604_800 }) ?? 0;
+    const now = ctx.now();
+    const ts = String(Math.floor(now.getTime() / 1000) - ageSec);
+    const sessionHash = optionalStringOf(body, 'sessionHash', 128) ?? `dev-${ts}`;
+
+    const params: VkParams =
+      scheme === VkSignatureScheme.LAUNCH_PARAMS
+        ? {
+            vk_anonymous_id: '0',
+            vk_app_id: String(appId),
+            vk_group_id: groupId ?? '0',
+            vk_is_app_user: '1',
+            vk_is_secure: '1',
+            vk_language: 'ru',
+            vk_loader_body_size: '0',
+            vk_protocol: 'https',
+            vk_ts: ts,
+            vk_user_id: socialId
+          }
+        : {
+            allow_preview: '0',
+            is_app_user: '1',
+            language: 'ru',
+            listener: '0',
+            platform: 'vk',
+            platform_type: 'mobile_web',
+            realm: 'vk.com',
+            session_hash: sessionHash,
+            sign_version: '2',
+            ts,
+            vk_app_id: String(appId),
+            viewer_id: socialId
+          };
+    if (groupId !== null && scheme === VkSignatureScheme.MINI_APP) params['group_id'] = groupId;
+    // Реферальная метка уходит ДВОЙНО: подписанным полем (`ref` / `vk_ref`) и
+    // неподписанным `hash` — ровно так, как её приносит живой WebView. Одна
+    // генерация покрывает обе ветки extractReferralClaim.
+    if (ref !== null) {
+      params[scheme === VkSignatureScheme.LAUNCH_PARAMS ? 'vk_ref' : 'ref'] = ref;
+      params['hash'] = ref;
+    }
+
+    const signed = signVkParams(params, {
+      appId,
+      secretKey,
+      scheme,
+      signKey: signKeyRaw as (typeof SIGN_KEYS)[number],
+      includeHash: signHash
+    });
+    const ttlSec = ctx.config.vk.initDataSourceTtlSec;
+    ctx.logger.info('dev_vk_sign', {
+      appId,
+      socialId,
+      scheme,
+      signKey: signed.signKey,
+      signHash,
+      ageSec,
+      hasRef: ref !== null
+    });
+    return {
+      initData: signed.initData,
+      sign: signed.sign,
+      scheme: signed.scheme,
+      signKey: signed.signKey,
+      signHash,
+      appId,
+      socialId,
+      ts,
+      checkString: signed.checkString,
+      // Сколько секунд строка проживёт на боевом входе; отрицательно — уже мертва.
+      expiresInSec: ttlSec - ageSec
+    };
+  });
 
   app.post('/v1/dev/grant', auth, async (request) => {
     assertDevRoutes(ctx);

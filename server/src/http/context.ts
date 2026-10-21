@@ -4,6 +4,7 @@ import { loadConfig, type AppConfig } from '../config/env.js';
 import { Logger } from '../lib/logger.js';
 import { createSecurityLayer, type SecurityLayer } from './security.js';
 import { TokenService } from '../modules/auth/token.js';
+import { createVkAuthTelemetry, type VkAuthTelemetry } from '../modules/auth/vk.telemetry.js';
 import { MemoryLedgerStore } from '../modules/ledger/ledger.memory.js';
 import { MongoLedgerStore } from '../modules/ledger/ledger.mongo.js';
 import type { LedgerStore } from '../modules/ledger/ledger.store.js';
@@ -71,6 +72,12 @@ export interface AppContext {
   readonly marketWorker: Loop;
   readonly tokens: TokenService;
   readonly logger: Logger;
+  /**
+   * Наблюдение за входом ВКонтакте: чем площадка подписала initData и сколько
+   * входов отклонено. Один на процесс — по той же причине, что и `security`.
+   * Подробности и запрет на персональные данные — в шапке modules/auth/vk.telemetry.ts.
+   */
+  readonly vkAuth: VkAuthTelemetry;
   /**
    * Слой безопасности транспорта: бакеты по адресу клиента, защитные головы,
    * идентификатор запроса.
@@ -193,6 +200,7 @@ export function createContext(config: AppConfig = loadConfig(), overrides: Parti
       overrides.tokens ??
       new TokenService({ secret: config.jwt.secret, ttlSec: config.jwt.ttlSec }),
     security: overrides.security ?? createSecurityLayer(config),
+    vkAuth: overrides.vkAuth ?? createVkAuthTelemetry(now),
     logger,
     idFactory,
     now,

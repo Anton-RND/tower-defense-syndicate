@@ -12,6 +12,12 @@
  * отладочных маршрутов невоспроизводимы.
  *
  * Покрытые модули (каждый — успешным действием И отказом домена, а не только 200 OK):
+ *  - Вход (P11): боевой `/v1/auth/vk/init-data` по initData, подписанной стендом,
+ *    повтор тем же строкой (created=false), подмена подписи (401), привязка
+ *    реферала из параметров запуска, вторая форма initData (`hash` внутри строки
+ *    проверки) и профиль последней подписи из `/health`;
+ *  - Бюджет входа: 429 по адресу не провал прогона, а ожидание `Retry-After`
+ *    (встроено в `call`); сколько обращений и ожиданий ушло — в итоговой строке;
  *  - Онбординг: стартовый комплект СВЕЖЕГО аккаунта (без единого гранта), первая
  *    стройка дрона и турели, наличие хлама в рекламных наградах;
  *  - Materials: котировка станка, конверсия, повтор по тому же Idempotency-Key,
@@ -49,18 +55,65 @@ const RUN = Date.now();
 let failures = 0;
 let token = '';
 
+// ─── Бюджет маршрутов входа ──────────────────────────────────────────────
+//
+// Смоук делает к входам больше десяти обращений с одного адреса, а
+// `RATE_LIMIT_AUTH_PER_MIN` по умолчанию — 10 в минуту. Раньше из-за этого
+// половина прогона краснела цепочкой «429 на входе → 401 на всём остальном», и
+// выглядела как сломанная игра, а не как сломанный бюджет. Теперь ожидание
+// встроено в `call` (а не только в блок ВКонтакте): на 429 прогон берёт
+// `Retry-After` у сервера, который его отдаёт (см. http/app.ts), и повторяет
+// запрос ОДИН раз. Сколько обращений и ожиданий ушло — печатается в итоге,
+// поэтому ожидание видно, а не спрятано в тишине.
+//
+//   SMOKE_AUTH_WAIT=0 — не ждать вовсе (прежнее поведение: SKIP/FAIL на 429);
+//   RATE_LIMIT_AUTH_PER_MIN=0 на стенде — лимитер выключен, ждать не приходится.
+
+/** Пути, входящие в ведро бюджета `auth`: маршруты входа и стендовый генератор initData. */
+function isAuthPath(path) {
+  return path.startsWith('/v1/auth/') || path.startsWith('/v1/dev/');
+}
+
+/** Обращения к маршрутам входа и число ожиданий — для итоговой строки прогона. */
+let authCalls = 0;
+let authWaits = 0;
+const AUTH_WAIT_ENABLED = process.env.SMOKE_AUTH_WAIT !== '0';
+/** Потолок ожидания одного шага: дольше — значит стенд настроен не для смоука. */
+const AUTH_WAIT_MAX_MS = 65_000;
+/** Если сервер не сказал `Retry-After`, ждём фиксированно, а не угадываем экспонентой. */
+const AUTH_WAIT_FALLBACK_MS = 15_000;
+
 async function call(method, path, body, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.idem) headers['Idempotency-Key'] = `${RUN}:${options.idem}`;
 
-  const response = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body)
-  });
-  const json = await response.json().catch(() => ({}));
-  return { status: response.status, json };
+  const send = async () => {
+    const response = await fetch(`${BASE}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    const json = await response.json().catch(() => ({}));
+    // Заголовки наружу: `Retry-After` — единственная честная информация о том,
+    // когда освободится бакет, и прятать её внутри `call` означало бы гадать.
+    return { status: response.status, json, headers: Object.fromEntries(response.headers) };
+  };
+
+  if (!isAuthPath(path)) return send();
+  authCalls += 1;
+  const first = await send();
+  if (first.status !== 429 || !AUTH_WAIT_ENABLED || options.noWait) return first;
+  const retryAfter = Number(first.headers?.['retry-after']);
+  const waitMs = Math.min(
+    AUTH_WAIT_MAX_MS,
+    Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) * 1000 : AUTH_WAIT_FALLBACK_MS
+  );
+  authWaits += 1;
+  console.log(`     бюджет входа исчерпан: жду ${(waitMs / 1000).toFixed(0)}с (Retry-After) и повторяю ${path}`);
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  authCalls += 1;
+  return send();
 }
 
 /** Шаг с ожиданием успеха: падение шага — провал прогона, а не тихая строчка. */
@@ -159,6 +212,93 @@ async function main() {
     );
   }
 
+
+  // ─── Боевой вход по подписанной initData (P11) ──────────────────────────────
+  // Единственный способ проверить цепочку «генератор подписал → сервер принял →
+  // реферал привязался» на живом транспорте, не имея клиента ВК. Автотесты
+  // (`auth.vk-init-data.test.ts`) доказывают то же самое на memory-сторе и
+  // `app.inject`; этот блок доказывает, что поднятый вами сервер живёт той же
+  // жизнью: координаты, лимиты и очередь — его, а не тестовой сборки.
+  //
+  // Пропуск НЕ считается успехом: если координат площадки нет, строка говорит
+  // SKIP и что для этого нужно. Исчерпанный адресный бюджет — уже нет: он
+  // лечится ожиданием `Retry-After` (встроено в `call` выше).
+  {
+    const viewer = `9${RUN % 900000000}`;
+    const invitee = `8${RUN % 900000000}`;
+    const hashViewer = `7${RUN % 900000000}`;
+    const signed = await call('POST', '/v1/dev/vk/sign', { socialId: viewer });
+    const unavailable = signed.status === 400 || signed.status === 403;
+
+    if (unavailable) {
+      console.log(
+        `SKIP боевой вход VK: /v1/dev/vk/sign → ${signed.status} (${signed.json?.error?.code ?? ''}) — ` +
+          'нужны VK_APP_ID + VK_SECRET_KEY на стенде'
+      );
+    } else if (signed.status === 429) {
+      console.log(
+        'SKIP боевой вход VK: 429 по адресу, ожидание выключено (SMOKE_AUTH_WAIT=0) — ' +
+          'поднимите стенд с RATE_LIMIT_AUTH_PER_MIN=0 или уберите SMOKE_AUTH_WAIT'
+      );
+    } else if (signed.status !== 200) {
+      failures += 1;
+      console.log(`FAIL боевой вход VK: генератор → ${signed.status} ${JSON.stringify(signed.json?.error ?? {})}`);
+    } else {
+      const initData = signed.json.initData;
+      const first = await call('POST', '/v1/auth/vk/init-data', { initData });
+      const repeat = await call('POST', '/v1/auth/vk/init-data', { initData });
+      const forged = await call('POST', '/v1/auth/vk/init-data', { initData: initData.replace(/sign=./, 'sign=0') });
+      const referred = await call('POST', '/v1/dev/vk/sign', { socialId: invitee, ref: `inv_${login.user?.id ?? ''}` });
+      const invited = await call('POST', '/v1/auth/vk/init-data', { initData: referred.json?.initData ?? '' });
+      // Вторая форма initData — с `hash` внутри строки проверки (переходы из
+      // шеринга). Верификатор обязан принимать обе, иначе вход ломается ровно
+      // на приглашённой аудитории, а проверить это без генератора нечем.
+      const hashSigned = await call('POST', '/v1/dev/vk/sign', { socialId: hashViewer, signHash: true });
+      const hashLogin = await call('POST', '/v1/auth/vk/init-data', { initData: hashSigned.json?.initData ?? '' });
+      const ref = invited.json?.referral ?? null;
+      // Профиль последней подписи — из /health: то, что оператор увидит на
+      // первом реальном входе, не имеющего доступа к логам.
+      const profile = (await call('GET', '/health')).json?.vk_auth ?? null;
+      const accepted = profile?.lastAccepted ?? null;
+
+      const passed =
+        first.status === 200 &&
+        first.json?.created === true &&
+        repeat.status === 200 &&
+        repeat.json?.created === false &&
+        forged.status === 401 &&
+        forged.json?.error?.code === 'INVALID_INIT_DATA' &&
+        ref?.bound === true &&
+        hashSigned.json?.signHash === true &&
+        hashLogin.status === 200 &&
+        accepted?.signKey === 'sign' &&
+        (accepted.source === 'raw' || accepted.source === 'decoded') &&
+        typeof accepted.tsKey === 'string';
+
+      if (passed) {
+        console.log(
+          `ok   боевой вход VK: created=true → повтор created=false · подмена подписи 401 · ` +
+            `реферал ${ref.reason}${ref.credited ? ' (награда пригласившему)' : ''}`
+        );
+        console.log(
+          `ok   форма initData с подписанным hash принята (зрительный ряд переходов из шеринга)`
+        );
+        console.log(
+          `     профиль последней подписи: scheme=${accepted.scheme} signKey=${accepted.signKey} ` +
+            `source=${accepted.source} hashIncluded=${accepted.hashIncluded} tsKey=${accepted.tsKey} ` +
+            `· входов принято ${profile.accepted}, отклонено ${profile.rejected}`
+        );
+      } else {
+        failures += 1;
+        console.log(
+          `FAIL боевой вход VK: вход=${first.status}/${first.json?.error?.code ?? ''} ` +
+            `повтор=${repeat.status}/${repeat.json?.created} подмена=${forged.status}/${forged.json?.error?.code ?? ''} ` +
+            `реферал=${invited.status}/${ref?.reason ?? referred.json?.error?.code ?? 'нет метки'} ` +
+            `hash-форма=${hashLogin.status}/${hashLogin.json?.error?.code ?? ''} профиль=${JSON.stringify(accepted ?? null)}`
+        );
+      }
+    }
+  }
 
   // ─── Молекулярный станок: курс, списание, идемпотентность ──────────────────────
   await step('грант астерия', 'POST', '/v1/dev/grant', { asteriumEarned: 500 });
@@ -646,6 +786,10 @@ async function main() {
 
   token = mainToken;
 
+  console.log(
+    `     бюджет входа: обращений ${authCalls}, ожиданий Retry-After ${authWaits} ` +
+      '(лимит по умолчанию 10/мин на адрес; SMOKE_AUTH_WAIT=0 — не ждать, RATE_LIMIT_AUTH_PER_MIN=0 — выключить)'
+  );
   console.log(failures === 0 ? '\nсмоук чист: 0 провалов' : `\nсмоук: провалов ${failures}`);
   process.exit(failures === 0 ? 0 : 1);
 

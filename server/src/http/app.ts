@@ -149,6 +149,11 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     payments: ctx.config.economy.limits.purchases.enabled,
     ads: ctx.config.economy.limits.ads.enabled,
     dev: ctx.config.devSignerEnabled,
+    // Профиль входа ВКонтакте (счётчики + чем площадка подписала последнюю
+    // initData). Здесь ради одного случая: первый живой вход единственен, и по
+    // этому полю видно, совпала ли ожидаемая схема (`raw`, `hashIncluded: false`)
+    // с фактической — без доступа к хосту и без разбора логов.
+    vk_auth: ctx.vkAuth.snapshot(),
     // Раздельно «включено» и «настроено»: `VK_PUSH_ENABLED=true` при отсутствии ключей
     // — это конфигурационная ошибка, и `/health` обязан показывать её до первой продажи,
     // а не после тысячи `notice_rejected` в логе.

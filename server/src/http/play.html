@@ -78,6 +78,7 @@
   <button id="btnRefresh">Обновить</button>
   <a class="link" href="/debug">стенд</a>
   <div class="spacer"></div>
+  <span id="authMode" class="pill">вход: …</span>
   <span id="who" class="muted">не вошёл</span>
 </header>
 
@@ -152,6 +153,9 @@
  *      поэтому там, где данных нет, интерфейс говорит об этом текстом, а не
  *      дорисовывает выдуманное.
  *   3. Никакой сборки и никаких зависимостей: один файл, vanilla JS, fetch.
+ *   4. Страница НЕ выбирает способ входа сама: режим (`vk` / `dev` / `disabled`)
+ *      приходит из `GET /v1/config` (`auth.mode`), а подпись initData ставит
+ *      площадка. Локально «дособирать» вход невозможно ни в одном из режимов.
  */
 
 const TOKEN_KEY = 'td.play.token';
@@ -159,6 +163,7 @@ const SID_KEY = 'td.play.sid';
 
 const S = {
   token: null,
+  auth: 'dev',        // режим входа с этого экземпляра страницы: 'vk' | 'dev' | 'disabled'
   cfg: null,          // GET /v1/config
   snap: null,         // { user, economy } последнего ответа API
   draft: null,        // редактируемый снимок планировки
@@ -221,6 +226,169 @@ function fmtMs(ms) {
   return h > 0 ? h + 'ч ' + m + 'м' : m > 0 ? m + 'м ' + s + 'с' : s + 'с';
 }
 
+// ─── Вход в игру ─────────────────────────────────────────────────────────────
+/*
+ * Три режима, и выбирает их СЕРВЕР, а не страница. `GET /v1/config` отдаёт
+ * `auth.mode` ('vk' | 'dev' | 'disabled'), посчитанный одним `authModeOf`
+ * (config/env.ts) — тем же, по которому `/health` и боевой маршрут входа судят о
+ * координатах площадки. Держать здесь собственную догадку по булевым флагам
+ * означало бы однажды получить витрину, которая зовёт `/v1/auth/vk/init-data`,
+ * когда сервер на этом конфиге отвечает ей 500 VK_NOT_CONFIGURED.
+ *
+ *   vk        — внутри WebView ВКонтакте: initData от VK Bridge → /v1/auth/vk/init-data;
+ *   dev       — стенд: socialId руками → /v1/auth/dev-login (закрыт в production);
+ *   disabled  — ни координат ВК, ни стенда: страница говорит причину, а не молча
+ *               ловит 403 на кнопке.
+ */
+
+const IS_VK = detectVkContainer();
+
+/**
+ * Мы в контейнере ВКонтакте или в обычном браузере?
+ *
+ * Два независимых признака, и оба дешёвые: UA-токены клиентов ВК и параметры
+ * запуска, которые площадка кладёт в URL iframe'а. `navigator.userAgentData`
+ * не используется: его нет в WebView на старых Android, а ровно там приложение
+ * открывается первым.
+ */
+function detectVkContainer() {
+  const ua = (navigator && navigator.userAgent) || '';
+  if (/VKApp|VKMobile|VKWebView/i.test(ua)) return true;
+  const query = (location.search || '').replace(/^\?/, '');
+  const fragment = (location.hash || '').replace(/^#/, '');
+  return looksLikeVkParams(query) || looksLikeVkParams(fragment);
+}
+
+/** Признак подписанных параметров площадки: `vk_app_id` плюс `sign` или `sig`. */
+function looksLikeVkParams(value) {
+  if (!value) return false;
+  const padded = '&' + value;
+  return value.indexOf('vk_app_id=') !== -1 || padded.indexOf('&sign=') !== -1 || padded.indexOf('&sig=') !== -1;
+}
+
+/**
+ * Ключ хранилища, привязанный к среде.
+ *
+ * Токен стенда и токен ВКонтакте — разные сессии с разными правами, и подмена
+ * одного другим означает «игрок вошёл чужим аккаунтом». Вне WebView ключ
+ * остаётся голым (`td.play.token`): так переживаемый браузерный стенд не теряет
+ * сессию после появления суффиксов.
+ */
+function scopedKey(base) {
+  if (!IS_VK) return base;
+  return base + '.' + (S.auth === 'vk' ? 'vk' : 'dev');
+}
+const tokenKey = () => scopedKey(TOKEN_KEY);
+const sidKey = () => scopedKey(SID_KEY);
+
+/**
+ * Строка запуска WebView.
+ *
+ * ИСТОЧНИК ПЕРВЫЙ — `window.VK`, если площадка уже внедрила свой мост в документ
+ * (ВК делает это для части приложений сам, а на `frontend/src` bridge лежит
+ * bundled вместе с клиентом). ИСТОЧНИК ВТОРОЙ — URL iframe'а: ВКонтакте грузит
+ * мини-приложение по адресу `https://<домен>/play?vk_app_id=…&sign=…`, то есть
+ * вся initData приходит вместе с запросом страницы, и читать её из `location`
+ * не хуже, чем из моста.
+ *
+ * СВОЙ СКРИПТ МОСТА ОТСЮДА НЕ ГРУЗИТСЯ, и это не лень, а CSP:
+ * `script-src 'self' 'unsafe-inline'` (http/security.ts:buildCsp) внешний
+ * `<script src="https://unpkg.com/…">` не пропустит — страница молча потеряла бы
+ * мост и всё равно уперлась в URL-фолбэк. Расширять `script-src` ради одного
+ * `getAppMetaData` означало бы отдать XSS всю витрину, а `play.html` — файл без
+ * сборки и без рантайм-зависимостей (принцип 3 в шапке скрипта).
+ *
+ * Пустой результат не подделывается: подпись ставит только площадка, поэтому
+ * локально собранный набор параметров сервер отвергнет как подделку, и витрина
+ * об этом скажет, а не сделает вид, что входа не произошло.
+ */
+async function getInitData() {
+  if (window.VK && typeof window.VK.invokeAsync === 'function') {
+    try {
+      const meta = await window.VK.invokeAsync('webview.getAppMetaData', {});
+      if (meta && typeof meta.initData === 'string' && meta.initData.length > 0) return meta.initData;
+    } catch (error) {
+      log('bridge: getAppMetaData не ответил (' + error.message + '), читаю URL', 'warn');
+    }
+  }
+  const query = (location.search || '').replace(/^\?/, '');
+  const fragment = (location.hash || '').replace(/^#/, '');
+  if (looksLikeVkParams(query)) return query;
+  if (looksLikeVkParams(fragment)) return fragment;
+  return query || null;
+}
+
+/** Режим входа для этого конфига (см. шапку блока про три режима). */
+function resolveAuthMode(cfg) {
+  const server = cfg && cfg.auth && cfg.auth.mode ? cfg.auth.mode : 'dev';
+  if (server !== 'vk' && server !== 'dev' && server !== 'disabled') return 'disabled';
+  // Вне контейнера ВКонтакте initData взять неоткуда. Показывать в обычном
+  // браузере кнопку, которая всегда даёт 401, — значит выдавать конфигурацию за баг.
+  if (!IS_VK && server === 'vk') return 'dev';
+  return server;
+}
+
+/** Панель входа рисуется по фактическому режиму, а не по надежде. */
+function applyAuthMode() {
+  const labels = { vk: 'вход: ВКонтакте', dev: 'вход: стенд', disabled: 'вход: выключен' };
+  const classes = { vk: 'ok', dev: 'warn', disabled: 'err' };
+  const pill = $('authMode');
+  pill.textContent = labels[S.auth] || 'вход: ' + S.auth;
+  pill.className = 'pill ' + (classes[S.auth] || '');
+  $('socialId').style.display = S.auth === 'dev' ? '' : 'none';
+  $('btnLogin').textContent = S.auth === 'vk' ? 'Переподключить' : 'Войти';
+  $('btnLogin').disabled = S.auth === 'disabled';
+}
+
+/** Сохраняет сессию входа; остальное делает `refresh` через единый `api`. */
+function adoptSession(result) {
+  S.token = result.token;
+  localStorage.setItem(tokenKey(), S.token);
+  if (result.referral) {
+    const ref = result.referral;
+    const note = ref.credited
+      ? 'пригласивший получил ' + ref.energy + '⚡ и ' + ref.asterium + '⛁'
+      : 'награды нет: ' + ref.reason;
+    log('реферал ' + ref.ref + ' (' + ref.source + ') — ' + note, ref.credited ? 'ok' : 'muted');
+  }
+}
+
+async function loginVk() {
+  const initData = await getInitData();
+  if (!initData) throw new Error('WebView не передал initData — откройте приложение через клиент ВК');
+  const result = await api('POST', '/v1/auth/vk/init-data', { initData });
+  adoptSession(result);
+  await refresh();
+  log('вход VK: ' + result.user.id.slice(0, 8) + (result.created ? ' · новый игрок' : ''), 'ok');
+}
+
+async function loginDev() {
+  const socialId = (($('socialId').value || '1') + '').trim() || '1';
+  localStorage.setItem(sidKey(), socialId);
+  const result = await api('POST', '/v1/auth/dev-login', { socialId });
+  adoptSession(result);
+  await refresh();
+  log('вход: socialId=' + socialId + ' · ' + result.user.id.slice(0, 8), 'ok');
+}
+
+async function login() {
+  const button = $('btnLogin');
+  button.disabled = true;
+  try {
+    if (S.auth === 'vk') await loginVk();
+    else if (S.auth === 'dev') await loginDev();
+    else log('вход отключён: задайте VK_APP_ID + VK_SECRET_KEY либо DEV_SIGNER_ENABLED=true', 'err');
+  } catch (error) {
+    // Сообщение сервера уже содержит код ошибки и детали (`EXPIRED_INIT_DATA`,
+    // `INVALID_INIT_DATA`, …): именно по ним «секрет не тот» отличается от
+    // «игрок принёс вчерашнюю строку» — глушить их здесь нельзя.
+    log('вход не удался: ' + error.message, 'err');
+  } finally {
+    button.disabled = S.auth === 'disabled';
+  }
+}
+
+
 // ─── Транспорт ───────────────────────────────────────────────────────────────
 
 /**
@@ -269,19 +437,8 @@ function syncDraftFromView() {
   };
 }
 
-async function login() {
-  const socialId = ($('socialId').value || '1').trim();
-  localStorage.setItem(SID_KEY, socialId);
-  try {
-    const result = await api('POST', '/v1/auth/dev-login', { socialId });
-    S.token = result.token;
-    localStorage.setItem(TOKEN_KEY, S.token);
-    log('вход: socialId=' + socialId + ' · ' + S.snap.user.id.slice(0, 8), 'ok');
-    await refresh();
-  } catch (error) {
-    log('вход не удался: ' + error.message, 'err');
-  }
-}
+// `login()` живёт в блоке «Вход в игру» выше: одна функция на три режима, а не
+// три копии по местам вызова — иначе стенд и боевой путь разъезжаются молча.
 
 async function refresh() {
   if (!S.token) { log('сначала войдите', 'err'); return; }
@@ -3606,7 +3763,6 @@ async function boot() {
   bindViewToggles();
   $('btnLogin').addEventListener('click', login);
   $('btnRefresh').addEventListener('click', refresh);
-  $('socialId').value = localStorage.getItem(SID_KEY) || '1';
 
   try {
     S.cfg = await api('GET', '/v1/config');
@@ -3616,16 +3772,34 @@ async function boot() {
     return;
   }
 
-  S.token = localStorage.getItem(TOKEN_KEY);
-  if (S.token) {
-    await refresh();
-    if (!S.snap) {
-      localStorage.removeItem(TOKEN_KEY);
-      S.token = null;
-      log('токен не принят — войдите заново', 'warn');
-    }
+  // Режим входа известен только после /v1/config: до него страница не имеет
+  // права ни выбрать маршрут, ни назвать причину отказа.
+  S.auth = resolveAuthMode(S.cfg);
+  applyAuthMode();
+  $('socialId').value = localStorage.getItem(sidKey()) || '1';
+
+  if (S.auth === 'disabled') {
+    log('вход отключён: на сервере нет ни VK_APP_ID + VK_SECRET_KEY, ни DEV_SIGNER_ENABLED', 'err');
+  } else if (S.auth === 'vk') {
+    // Авто-вход: в WebView кнопки «Войти» для игрока не существует, площадка
+    // уже подписала его параметры, и единственное, что от нас требуется, —
+    // ими воспользоваться.
+    await login();
   } else {
-    log('введите socialId и нажмите «Войти» (стенд: DEV_SIGNER_ENABLED)');
+    S.token = localStorage.getItem(tokenKey());
+    if (S.token) {
+      await refresh();
+      if (!S.snap) {
+        localStorage.removeItem(tokenKey());
+        S.token = null;
+        log('токен не принят — войдите заново', 'warn');
+      }
+    }
+    if (!S.snap) {
+      // ?auto=1 — смоук и автотесты полигона: вход без клика по кнопке.
+      if (new URLSearchParams(location.search).get('auto') === '1') await login();
+      else log('введите socialId и нажмите «Войти» (стенд: DEV_SIGNER_ENABLED)');
+    }
   }
 
   // Склады и реген живут временем, а не кликами: раз в 20 секунд подтягиваем снимок,

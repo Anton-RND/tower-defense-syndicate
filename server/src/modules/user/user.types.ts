@@ -184,6 +184,23 @@ export interface PvpProfile {
 export interface ReferralState {
   /** Кого пригласили меня (id аккаунта пригласившего). Ставится один раз. */
   invitedBy: string | null;
+  /**
+   * Когда связка обработана до конца: награда выдана либо окончательно отклонена
+   * (лимит, самоприглашение, удалённый пригласивший).
+   *
+   * Смысл поля — закрытая в одном документе отметка о том, что ВТОРОЙ документ
+   * (пригласивший) уже тронут. Привязка и награда лежат в разных документах, и
+   * общей транзакции у проекта нет (шапка clan/commit.ts): падение между двумя
+   * записями оставляло бы новичка привязанным, но без награды — молча, навсегда,
+   * потому что на следующем входе `invitedBy` уже занят. С `settledAt` такое
+   * состояние различимо: `invitedBy` есть, `settledAt` нет → HTTP-слой обязан
+   * один раз добросить награду (идемпотентно, см. referral.settleReferralReward).
+   *
+   * Документы старше этого поля читаются как `null` — но только вместе с
+   * `invitedBy`: одинокий `invitedBy` без награды возможен и в старом мире, и
+   * окно догона ограничено возрастом аккаунта (referral.REFERRAL_SETTLE_WINDOW_MS).
+   */
+  settledAt: Date | null;
   /** Когда награда пригласившему выдана; null — ещё не выдавалась. */
   creditedAt: Date | null;
   /** Ключ суток UTC (YYYY-MM-DD) счётчика собственных приглашений. */
@@ -468,7 +485,7 @@ export function emptyPvp(day: string): PvpProfile {
 }
 
 export function emptyReferral(day: string): ReferralState {
-  return { invitedBy: null, creditedAt: null, day, count: 0, invited: [] };
+  return { invitedBy: null, settledAt: null, creditedAt: null, day, count: 0, invited: [] };
 }
 
 /**
@@ -583,7 +600,15 @@ export function cloneAccount(account: UserAccount): UserAccount {
     // и фолбэк здесь (а не в вызывающих кодах) — тот же приём, что и для `base` выше.
     pvp: account.pvp ? { ...account.pvp } : emptyPvp(account.createdAt.toISOString().slice(0, 10)),
     referral: account.referral
-      ? { ...account.referral, invited: [...account.referral.invited] }
+      ? {
+          ...account.referral,
+          invited: [...account.referral.invited],
+          // Документы старше settledAt поля не имеют: undefined → null. Строка
+          // Mongo превращается в Date здесь же — cloneAccount вызывается на каждом
+          // transact, и строка в редукторе сломала бы сравнение дат догона.
+          settledAt: account.referral.settledAt ? new Date(account.referral.settledAt) : null,
+          creditedAt: account.referral.creditedAt ? new Date(account.referral.creditedAt) : null
+        }
       : emptyReferral(account.createdAt.toISOString().slice(0, 10)),
     materials: {
       ...account.materials,
