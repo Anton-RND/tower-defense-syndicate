@@ -7,14 +7,15 @@ import { defenderLabel, findOpponent } from '../../modules/pvp/matchmaking.js';
 import { clearLayout, deployableItems, describeBase, quoteWallCost, saveLayout, type LayoutSaveResult } from '../../modules/pvp/defense.js';
 import { accountOf, authHook, claimsOf } from '../auth.js';
 import type { AppContext } from '../context.js';
-import { accountAction, bodyOf, intOf, optionalIntOf, stringOf, stringArrayOf, viewOf } from '../helpers.js';
+import { accountAction, bodyOf, intOf, optionalIntOf, stringOf, stringArrayOf, syncState, viewOf } from '../helpers.js';
 
 /**
  * PvP и оборонительная сетка (Шаг 4).
  *
- * Соперник перед боем синхронизируется так же, как атакующий: добыча берётся из его
- * `mined`, а склад за время отсутствия не рос. Не синхронизировать его — значит
- * систематически недодавать атакующему трофеев, и игрок это заметит мгновенно.
+ * Соперник перед боем ДОГОНЯЕТСЯ, но не ПИШЕТСЯ: его добыча обязана быть начисленной
+ * (лут берётся из `storages`), а вот двигать чужой `revision` по чужому запросу — значит
+ * самому плодить CAS-конфликты там, где бой при конфликте пересчитывается заново.
+ * Подробно о несимметрии догона — в обработчике POST /v1/pvp/raid.
  *
  * Состав армии наружу не доверяется: сервер берёт боевые цифры из инвентаря атакующего
  * по id предметов, а не из присланных характеристик (см. RaidInput.armyItemIds).
@@ -52,13 +53,22 @@ export function registerPvpRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (defenderId === attackerId) {
       throw validationError('Атаковать собственную базу нельзя', { defenderId });
     }
-    // Догоняем оба документа: атакующего — регеном энергии и суточными счётчиками,
-    // защитника — накопленным майнингом, из которого берётся лут.
+    // Догон двух документов устроен несимметрично, и это не случайность.
+    //
+    // Атакующий — записью: `commitRaid` обновит его документ первым транзом, а витрина
+    // в ответе обязана быть свежей по складам (сам `resolveRaid` догоняет только энергию
+    // и лут). Защитник — только чтением: писать ЧУЖОЙ документ по ЧУЖОМУ запросу значит
+    // лишний раз двигать его `revision` и расширять окно, в котором параллельный запрос
+    // хозяина заставит бой пересчитаться заново — `commitRaid` при CAS-конфликте вызывает
+    // `resolveRaid` повторно (см. raid.ts), а это ~2.5 мс синхронного CPU.
+    //
+    // На лут отсутствие пре-фрайта не влияет: `resolveRaid` сам догоняет защитника
+    // `applyMiningTick` по снимку, а `applyRaidToDefender` списывает дельту от ЖИВОГО
+    // документа с отсечкой по остатку (`Math.min`) — перекачать невозможно.
     await accountAction(ctx, attackerId, now, (synced) => ({ account: synced, meta: null }));
-    await accountAction(ctx, defenderId, now, (synced) => ({ account: synced, meta: null }));
-
-    const defender = await ctx.users.findById(defenderId);
-    if (!defender) throw validationError('Соперник не найден', { defenderId });
+    const storedDefender = await ctx.users.findById(defenderId);
+    if (!storedDefender) throw validationError('Соперник не найден', { defenderId });
+    const defender = syncState(storedDefender, now, ctx.config.economy, ctx.idFactory).account;
 
     const raidId = makeRaidId(attackerId, defenderId, ctx.idFactory());
     const committed = await commitRaid(

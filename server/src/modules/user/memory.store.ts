@@ -2,6 +2,7 @@ import type { Platform } from '../../config/env.js';
 import { notFound } from '../../lib/errors.js';
 import type { SocialIdentity } from '../auth/vk.adapter.js';
 import { cloneAccount, type UserAccount } from './user.types.js';
+import { sameState } from './doc.diff.js';
 import type { MatchCandidate, OpponentFilter, UserStore } from './user.store.js';
 
 /**
@@ -70,6 +71,10 @@ export class MemoryUserStore implements UserStore {
     // Редуктор работает на копии: исключение внутри = никаких изменений (all-or-nothing).
     const next = reducer(cloneAccount(stored));
     next.id = stored.id;
+    // Та же семантика, что у Mongo-драйвера (см. MongoUserStore.transact): холостой
+    // редуктор не пишет документ и не растит revision. Драйверы обязаны сходиться,
+    // иначе тесты на memory проверяют поведение, которого в проде нет.
+    if (sameState(stored, next)) return cloneAccount(stored);
     next.revision = stored.revision + 1;
     this.byId.set(id, next);
     return cloneAccount(next);

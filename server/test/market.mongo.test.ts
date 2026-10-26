@@ -21,8 +21,9 @@ import { buyLot, listLot, reconcileMarket, type MarketDeps } from '../src/module
 import { repriceMarket } from '../src/modules/market/economy.js';
 import { lotTotal, type LotState } from '../src/modules/market/lot.types.js';
 import { MongoUserStore } from '../src/modules/user/mongo.store.js';
-import { createAccount, type UserAccount } from '../src/modules/user/user.types.js';
+import { cloneAccount, createAccount, type UserAccount } from '../src/modules/user/user.types.js';
 import {
+  newAccount,
   withJunk,
   withResources,
   withStaniumField,
@@ -692,6 +693,42 @@ describe.skipIf(!run)('market.mongo: соседи по базе — игрок �
       const second = await users.getOrCreate(identity, new Date(), () => account);
       expect(second.created).toBe(false);
       expect(second.account.id).toBe(first.account.id);
+    } finally {
+      await users.disconnect();
+    }
+  });
+
+  it('дельта-запись: холостой transact не трогает документ, частичный — сохраняет нетронутые поля', async () => {
+    // Смысл теста — не бизнес-правило, а свойство самого `$set`: дельта обязана
+    // давать побайтово тот же документ, что дал бы полный пейлоад. Memory-стор
+    // этого не проверяет: у него нет ни BSON, ни сетки путей, ни oplog.
+    const users = new MongoUserStore(uri as string, { dbName: dbName('users') });
+    await users.connect();
+    try {
+      const seed = withJunk(withResources(newAccount(config, new Date(), 'delta-write'), { sec: 7 }), { chips: 3 });
+      await users.save(seed);
+      const before = await users.findById(seed.id);
+      if (!before) throw new Error('фикстура: игрок не сохранился');
+
+      // 1. Редуктор, вернувший эквивалентный клон, — холостой: ни записи, ни revision.
+      const noop = await users.transact(seed.id, (current) => cloneAccount(current));
+      expect(noop.revision).toBe(before.revision);
+
+      // 2. Меняется ОДНО поле; тяжёлые соседи (инвентарь, планировка, заказы) обязаны
+      //    остаться в документе — именно их полный `$set` перетирал ради ~1 КБ дельты.
+      const partial = await users.transact(seed.id, (current) => ({
+        ...current,
+        resources: { ...current.resources, sec: 999 }
+      }));
+      expect(partial.revision).toBe(before.revision + 1);
+
+      const after = await users.findById(seed.id);
+      expect(after?.resources.sec).toBe(999);
+      expect(after?.junk.chips).toBe(3);
+      expect(after?.inventory).toEqual(before?.inventory);
+      expect(after?.base).toEqual(before?.base);
+      expect(after?.orders).toEqual(before?.orders);
+      expect(after?.entitlements).toEqual(before?.entitlements);
     } finally {
       await users.disconnect();
     }

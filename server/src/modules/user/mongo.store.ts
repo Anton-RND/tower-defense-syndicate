@@ -8,6 +8,7 @@ import type { Platform } from '../../config/env.js';
 import type { SocialIdentity } from '../auth/vk.adapter.js';
 import { cloneAccount, type UserAccount } from './user.types.js';
 import { toAccount, toSetPayload, createUserModel, type UserDoc, type UserModel } from './mongo.model.js';
+import { diffSetPayload, sameState } from './doc.diff.js';
 import {
   ConcurrentUpdateError,
   MAX_TRANSACT_ATTEMPTS,
@@ -147,10 +148,20 @@ export class MongoUserStore implements UserStore {
       // Редуктор может бросить AppError (не хватило энергии и т.п.) — запись не трогается.
       const next = reducer(cloneAccount(current));
       next.id = current.id;
-      next.revision = current.revision + 1;
 
+      // Дельта, а не весь документ: догон экономики меняет 0.2 КБ из 17.4 — 3 поля из 29
+      // (замер: `npm run bench`, раздел 3). Холостой редуктор (тот же такт, то же
+      // состояние) не пишет ничего и НЕ растит revision: пустой рост revision — это
+      // CAS-конфликт с параллельным запросом, а рейд при конфликте пересчитывает бой
+      // заново (см. commitRaid / raid.ts).
+      const prevPayload = toSetPayload(current);
+      const nextPayload = toSetPayload(next);
+      if (sameState(prevPayload, nextPayload)) return current;
+
+      const diff = diffSetPayload(prevPayload, nextPayload) as Record<string, unknown>;
+      next.revision = current.revision + 1;
       const res = await this.db
-        .updateOne({ _id: current.id, revision: current.revision }, { $set: toSetPayload(next) })
+        .updateOne({ _id: current.id, revision: current.revision }, { $set: { ...diff, revision: next.revision } })
         .exec();
 
       if (res.matchedCount === 1) return next;
