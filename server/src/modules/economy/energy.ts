@@ -40,8 +40,16 @@ export function computeEnergyTick(account: UserAccount, now: Date, config: Econo
 
   const raw = account.resources.energy + (perHour * elapsedMs) / HOUR_MS;
   const energy = round6(Math.min(cap, raw));
-  // Полная энергия «замораживает» точку отсчёта, иначе переполнение будет копиться.
-  const updated = energy >= cap ? now : account.energyUpdatedAt;
+  // Точка отсчёта ВСЕГДА поднимается на `now`. Раньше здесь был `energy >= cap ? now :
+  // account.energyUpdatedAt` — и ниже капа курсор не двигался никогда, тогда как строка
+  // выше уже положила начисленное в `energy`. Следствие: каждый запрос заново добавлял
+  // ВСЁ окно от старой метки, то есть игрок, кликавший в клиент, печатал себе энергию
+  // скоростью числа запросов (замер: два опроса в один такт дали 1 + 2×0.4167 вместо
+  // 1 + 0.4167). «Заморозка на полном баке» в комментарии к прошлой версии защищала от
+  // переполнения, которого нет: `Math.min(cap, raw)` его уже отсёк, а накопление сверху
+  // капа — и есть смысл капа. Дробная часть теряться не может: она живёт в `energy`,
+  // поэтому полный переход курсора ничего не должен ни игроку, ни журналу.
+  const updated = now;
 
   let fullAt: Date | null = null;
   if (energy < cap && perHour > 0) {
