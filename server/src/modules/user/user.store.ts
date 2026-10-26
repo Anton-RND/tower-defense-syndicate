@@ -1,4 +1,5 @@
 import type { Platform } from '../../config/env.js';
+import type { StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import type { SocialIdentity } from '../auth/vk.adapter.js';
 import type { UserAccount } from './user.types.js';
 
@@ -79,6 +80,22 @@ export interface UserStore {
    * именно тот код, который обязан быть предсказуемым для игроков одного пула.
    */
   findOpponents(filter: OpponentFilter): Promise<MatchCandidate[]>;
+
+  /**
+   * Счётчики обращений за жизнь процесса (см. lib/store.metrics.ts).
+   *
+   * Нужны, потому что оптимистичная блокировка невидима снаружи: конфликт `revision`
+   * либо тихо повторяется до пяти попыток, либо бросается наружу. Доля конфликтов —
+   * тот самый замер, который решает, стоит ли выносить симуляцию боя из редуктора
+   * (каждый повтор — ~2.5 мс синхронного CPU, modules/pvp/raid.ts) и переводить GET
+   * на непишущий путь. Без него оба решения — догадки.
+   *
+   * Что входит: ходы через `transact` и чтения документов на путях витрины и подбора.
+   * Что НЕ входит: прямые `save` и вход через `getOrCreate` — это сидирование и логин,
+   * а не горячий путь; смешивать их с опросами игрока значит испортить долю конфликтов
+   * ровно там, где она читается.
+   */
+  metrics(): StoreMetricsSnapshot;
 }
 
 export class ConcurrentUpdateError extends Error {

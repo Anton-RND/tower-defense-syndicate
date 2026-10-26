@@ -4,6 +4,7 @@ import { createConnection, type Connection } from 'mongoose';
 
 import { notFound } from '../../lib/errors.js';
 import { Logger, type LogLevel } from '../../lib/logger.js';
+import { createStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import { cloneLot, emptyJunkTotals, isExpired, isPendingEscrow, type LotState } from './lot.types.js';
 import { createLotModel, toLot, toLotSetPayload, type LotDoc, type LotModel } from './mongo.model.js';
 import { LotConflictError, MAX_LOT_TRANSACT_ATTEMPTS, type LotStore } from './lot.store.js';
@@ -24,6 +25,7 @@ export class MongoLotStore implements LotStore {
 
   private connection: Connection | null = null;
   private model: LotModel | null = null;
+  private readonly counters = createStoreMetrics();
 
   constructor(
     private readonly uri: string,
@@ -71,14 +73,17 @@ export class MongoLotStore implements LotStore {
   }
 
   async findById(id: string): Promise<LotState | null> {
+    this.counters.read();
     const doc = (await this.db.findById(id).lean<LotDoc | null>().exec()) as LotDoc | null;
     return doc ? toLot(doc) : null;
   }
 
   async transact(id: string, reducer: (current: LotState) => LotState): Promise<LotState> {
+    this.counters.transact();
     for (let attempt = 1; attempt <= MAX_LOT_TRANSACT_ATTEMPTS; attempt++) {
       const doc = (await this.db.findById(id).lean<LotDoc | null>().exec()) as LotDoc | null;
       if (!doc) throw notFound(`Лот ${id} не найден`);
+      this.counters.read();
 
       const current = toLot(doc);
       const next = reducer(cloneLot(current));
@@ -88,11 +93,24 @@ export class MongoLotStore implements LotStore {
       const res = await this.db
         .updateOne({ _id: current.id, revision: current.revision }, { $set: toLotSetPayload(next) })
         .exec();
-      if (res.matchedCount === 1) return next;
+      if (res.matchedCount === 1) {
+        this.counters.write();
+        return next;
+      }
 
+      // Каждый такой повтор — второй проход редуктора `claimLot` по уже занятому лоту,
+      // то есть отказ «лот уже продан» игроку. Он штатный, но обязан быть измеримым:
+      // без счётчика нельзя отличить здоровый торг от того, что один лот держат в
+      // конфликте постоянно.
+      this.counters.conflict(attempt);
       this.logger.debug('Конфликт версий лота, повторяем', { id, attempt, revision: current.revision });
     }
+    this.counters.abandon(MAX_LOT_TRANSACT_ATTEMPTS);
     throw new LotConflictError(id, MAX_LOT_TRANSACT_ATTEMPTS);
+  }
+
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   async insert(lot: LotState): Promise<LotState> {

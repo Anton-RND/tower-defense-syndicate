@@ -4,6 +4,7 @@ import { createConnection, type Connection } from 'mongoose';
 
 import { Logger, type LogLevel } from '../../lib/logger.js';
 import { notFound } from '../../lib/errors.js';
+import { createNoopAwareStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import type { Platform } from '../../config/env.js';
 import type { SocialIdentity } from '../auth/vk.adapter.js';
 import { cloneAccount, type UserAccount } from './user.types.js';
@@ -38,6 +39,7 @@ export class MongoUserStore implements UserStore {
 
   private connection: Connection | null = null;
   private model: UserModel | null = null;
+  private readonly counters = createNoopAwareStoreMetrics();
 
   constructor(
     private readonly uri: string,
@@ -88,11 +90,13 @@ export class MongoUserStore implements UserStore {
   }
 
   async findById(id: string): Promise<UserAccount | null> {
+    this.counters.read();
     const doc = (await this.db.findById(id).lean<UserDoc | null>().exec()) as UserDoc | null;
     return doc ? toAccount(doc) : null;
   }
 
   async findBySocial(platform: Platform, socialId: string): Promise<UserAccount | null> {
+    this.counters.read();
     const doc = (await this.db
       .findOne({ platform, socialId })
       .lean<UserDoc | null>()
@@ -140,9 +144,11 @@ export class MongoUserStore implements UserStore {
   }
 
   async transact(id: string, reducer: (current: UserAccount) => UserAccount): Promise<UserAccount> {
+    this.counters.transact();
     for (let attempt = 1; attempt <= MAX_TRANSACT_ATTEMPTS; attempt++) {
       const doc = (await this.db.findById(id).lean<UserDoc | null>().exec()) as UserDoc | null;
       if (!doc) throw notFound(`Игрок ${id} не найден`);
+      this.counters.read();
 
       const current = toAccount(doc);
       // Редуктор может бросить AppError (не хватило энергии и т.п.) — запись не трогается.
@@ -156,7 +162,10 @@ export class MongoUserStore implements UserStore {
       // заново (см. commitRaid / raid.ts).
       const prevPayload = toSetPayload(current);
       const nextPayload = toSetPayload(next);
-      if (sameState(prevPayload, nextPayload)) return current;
+      if (sameState(prevPayload, nextPayload)) {
+        this.counters.noop();
+        return current;
+      }
 
       const diff = diffSetPayload(prevPayload, nextPayload) as Record<string, unknown>;
       next.revision = current.revision + 1;
@@ -164,11 +173,23 @@ export class MongoUserStore implements UserStore {
         .updateOne({ _id: current.id, revision: current.revision }, { $set: { ...diff, revision: next.revision } })
         .exec();
 
-      if (res.matchedCount === 1) return next;
+      if (res.matchedCount === 1) {
+        this.counters.write();
+        return next;
+      }
 
+      // Конфликт версий — единственная причина, по которой редуктор запускается повторно.
+      // Для рейда это повторная симуляция боя, поэтому счётчик и нужен: он показывает,
+      // платим ли мы эту цену постоянно или никогда (см. lib/store.metrics.ts).
+      this.counters.conflict(attempt);
       this.logger.debug('Конфликт версий, повторяем', { id, attempt, revision: current.revision });
     }
+    this.counters.abandon(MAX_TRANSACT_ATTEMPTS);
     throw new ConcurrentUpdateError(id, MAX_TRANSACT_ATTEMPTS);
+  }
+
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   async save(account: UserAccount): Promise<UserAccount> {
@@ -192,6 +213,7 @@ export class MongoUserStore implements UserStore {
    * один и тот же соперник не становится «постоянным».
    */
   async findOpponents(filter: OpponentFilter): Promise<MatchCandidate[]> {
+    this.counters.read();
     const limit = Math.max(1, Math.trunc(filter.limit) || 1);
     const rows = await this.db
       .aggregate<OpponentRow>([

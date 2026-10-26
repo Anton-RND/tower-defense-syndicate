@@ -159,6 +159,16 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     // а не после тысячи `notice_rejected` в логе.
     push: ctx.notices.readiness(),
     market_worker: ctx.config.market.worker.enabled,
+    // Оптимистичная блокировка невидима снаружи, а именно она решает, куда идти следующим:
+    // доля CAS-конфликтов — это цена повторной симуляции боя в рейде, а доля холостых
+    // ходов — цена пишущего GET. Без этих чисел обе оптимизации заказываются вслепую
+    // (см. lib/store.metrics.ts).
+    stores: {
+      users: ctx.users.metrics(),
+      clans: ctx.clans.metrics(),
+      lots: ctx.lots.metrics(),
+      commodities: ctx.commodities.metrics()
+    },
     ts: ctx.now()
   }));
 

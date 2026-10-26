@@ -1,5 +1,6 @@
 import type { Platform } from '../../config/env.js';
 import { notFound } from '../../lib/errors.js';
+import { createNoopAwareStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import type { SocialIdentity } from '../auth/vk.adapter.js';
 import { cloneAccount, type UserAccount } from './user.types.js';
 import { sameState } from './doc.diff.js';
@@ -14,6 +15,7 @@ export class MemoryUserStore implements UserStore {
 
   private readonly byId = new Map<string, UserAccount>();
   private readonly bySocial = new Map<string, string>();
+  private readonly counters = createNoopAwareStoreMetrics();
 
   async connect(): Promise<void> {
     /* no-op */
@@ -29,6 +31,7 @@ export class MemoryUserStore implements UserStore {
   }
 
   async findById(id: string): Promise<UserAccount | null> {
+    this.counters.read();
     const account = this.byId.get(id);
     return account ? cloneAccount(account) : null;
   }
@@ -66,18 +69,34 @@ export class MemoryUserStore implements UserStore {
   }
 
   async transact(id: string, reducer: (current: UserAccount) => UserAccount): Promise<UserAccount> {
+    this.counters.transact();
     const stored = this.byId.get(id);
     if (!stored) throw notFound(`Игрок ${id} не найден`);
+    this.counters.read();
     // Редуктор работает на копии: исключение внутри = никаких изменений (all-or-nothing).
     const next = reducer(cloneAccount(stored));
     next.id = stored.id;
     // Та же семантика, что у Mongo-драйвера (см. MongoUserStore.transact): холостой
     // редуктор не пишет документ и не растит revision. Драйверы обязаны сходиться,
     // иначе тесты на memory проверяют поведение, которого в проде нет.
-    if (sameState(stored, next)) return cloneAccount(stored);
+    if (sameState(stored, next)) {
+      this.counters.noop();
+      return cloneAccount(stored);
+    }
     next.revision = stored.revision + 1;
     this.byId.set(id, next);
+    this.counters.write();
     return cloneAccount(next);
+  }
+
+  /**
+   * Конкурентных проигрышей у этого драйвера не бывает по построению: тело редуктора
+   * выполняется целиком, без ожиданий (см. шапку MemoryLotStore.transact). Поэтому
+   * `casConflicts` здесь всегда ноль — и это не пустое поле, а проверка обратной
+   * стороны: любой ненулевой конфликт в проде приходит из mongo-драйвера.
+   */
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   async save(account: UserAccount): Promise<UserAccount> {
@@ -92,6 +111,7 @@ export class MemoryUserStore implements UserStore {
    * и дев, где игроков десятки, — платить за индекс незачем.
    */
   async findOpponents(filter: OpponentFilter): Promise<MatchCandidate[]> {
+    this.counters.read();
     const limit = Math.max(1, Math.trunc(filter.limit) || 1);
     const middle = (filter.ratingMin + filter.ratingMax) / 2;
     const candidates: MatchCandidate[] = [];

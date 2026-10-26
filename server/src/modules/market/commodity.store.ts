@@ -1,4 +1,5 @@
 import { notFound } from '../../lib/errors.js';
+import { createNoopAwareStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import { cloneCommodity, neutralCommodity, type CommodityState } from './commodity.types.js';
 import type { JunkId } from '../../config/workshop.js';
 
@@ -35,6 +36,9 @@ export interface CommodityStore {
 
   /** Создаёт отсутствующий снапшот; существующий НЕ перезаписывает. */
   ensure(state: CommodityState): Promise<CommodityState>;
+
+  /** Счётчики обращений за жизнь процесса (см. lib/store.metrics.ts). */
+  metrics(): StoreMetricsSnapshot;
 }
 
 /** Снапшот не обновлён после CAS-повторов: конкурентный читатель, а не отсутствие документа. */
@@ -52,6 +56,7 @@ export class MemoryCommodityStore implements CommodityStore {
   readonly driver = 'memory' as const;
 
   private readonly byJunk = new Map<JunkId, CommodityState>();
+  private readonly counters = createNoopAwareStoreMetrics();
 
   async connect(): Promise<void> {}
 
@@ -60,6 +65,7 @@ export class MemoryCommodityStore implements CommodityStore {
   }
 
   async find(junk: JunkId): Promise<CommodityState | null> {
+    this.counters.read();
     const state = this.byJunk.get(junk);
     return state ? cloneCommodity(state) : null;
   }
@@ -74,12 +80,24 @@ export class MemoryCommodityStore implements CommodityStore {
    * выглядит защитой и не защищает ничего. Повторы живут в mongo-сторе.
    */
   async transact(junk: JunkId, reducer: (current: CommodityState) => CommodityState): Promise<CommodityState> {
+    this.counters.transact();
     const stored = this.byJunk.get(junk);
     if (!stored) throw notFound(`Товар ${junk} не найден`);
+    this.counters.read();
     const next = reducer(cloneCommodity(stored));
     next.junk = stored.junk;
+    // Ревизию ведёт РЕДУКТОР (см. шапку MongoCommodityStore.transact), поэтому она и есть
+    // бесплатный признак холостого хода: не сдвинулась ревизия — не сдвинулось ничего.
+    // Пара `noops`/`writes` здесь показывает цену, которую этот стор платит зря:
+    // пересчёт внутри паузы пишет документ целиком, хотя менять нечего.
+    if (next.revision === stored.revision) this.counters.noop();
     this.byJunk.set(junk, next);
+    this.counters.write();
     return cloneCommodity(next);
+  }
+
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   /**

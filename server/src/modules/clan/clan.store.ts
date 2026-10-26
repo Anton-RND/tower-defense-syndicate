@@ -1,4 +1,5 @@
 import { notFound } from '../../lib/errors.js';
+import { createStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import { cloneClan, type ClanState } from './clan.types.js';
 
 /**
@@ -38,6 +39,9 @@ export interface ClanStore {
 
   /** Участники клана — для витрины и разбора членства. */
   listByMember(userId: string, limit?: number): Promise<ClanState[]>;
+
+  /** Счётчики обращений за жизнь процесса (см. lib/store.metrics.ts). */
+  metrics(): StoreMetricsSnapshot;
 }
 
 export class DuplicateClanNameError extends Error {
@@ -67,6 +71,7 @@ export class MemoryClanStore implements ClanStore {
 
   private readonly byId = new Map<string, ClanState>();
   private readonly byName = new Map<string, string>();
+  private readonly counters = createStoreMetrics();
 
   async connect(): Promise<void> {
     /* no-op */
@@ -78,6 +83,7 @@ export class MemoryClanStore implements ClanStore {
   }
 
   async findById(id: string): Promise<ClanState | null> {
+    this.counters.read();
     const clan = this.byId.get(id);
     return clan ? cloneClan(clan) : null;
   }
@@ -88,14 +94,21 @@ export class MemoryClanStore implements ClanStore {
   }
 
   async transact(id: string, reducer: (current: ClanState) => ClanState): Promise<ClanState> {
+    this.counters.transact();
     const stored = this.byId.get(id);
     if (!stored) throw notFound(`Клан ${id} не найден`);
+    this.counters.read();
     const next = reducer(cloneClan(stored));
     next.id = stored.id;
     next.revision = stored.revision + 1;
     this.byId.set(id, next);
     this.byName.set(next.name, id);
+    this.counters.write();
     return cloneClan(next);
+  }
+
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   async insert(clan: ClanState): Promise<ClanState> {

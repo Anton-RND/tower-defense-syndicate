@@ -1,4 +1,5 @@
 import { notFound } from '../../lib/errors.js';
+import { createStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import { cloneLot, emptyJunkTotals, isActiveLot, isExpired, isPendingEscrow, type LotState } from './lot.types.js';
 import type { JunkId } from '../../config/workshop.js';
 
@@ -59,6 +60,9 @@ export interface LotStore {
 
   /** Вставленные, но не подтверждённые эскроу — работа для reconcile. */
   listPendingEscrow(limit: number): Promise<LotState[]>;
+
+  /** Счётчики обращений за жизнь процесса (см. lib/store.metrics.ts). */
+  metrics(): StoreMetricsSnapshot;
 }
 
 /** Лот не обновлён после CAS-повторов: конкурентная запись, а не отсутствие документа. */
@@ -76,6 +80,7 @@ export class MemoryLotStore implements LotStore {
   readonly driver = 'memory' as const;
 
   private readonly byId = new Map<string, LotState>();
+  private readonly counters = createStoreMetrics();
 
   async connect(): Promise<void> {}
   async disconnect(): Promise<void> {
@@ -83,6 +88,7 @@ export class MemoryLotStore implements LotStore {
   }
 
   async findById(id: string): Promise<LotState | null> {
+    this.counters.read();
     const lot = this.byId.get(id);
     return lot ? cloneLot(lot) : null;
   }
@@ -94,13 +100,20 @@ export class MemoryLotStore implements LotStore {
    * mongo-сторе, где между чтением и записью действительно есть окно.
    */
   async transact(id: string, reducer: (current: LotState) => LotState): Promise<LotState> {
+    this.counters.transact();
     const stored = this.byId.get(id);
     if (!stored) throw notFound(`Лот ${id} не найден`);
+    this.counters.read();
     const next = reducer(cloneLot(stored));
     next.id = stored.id;
     next.revision = stored.revision + 1;
     this.byId.set(id, next);
+    this.counters.write();
     return cloneLot(next);
+  }
+
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   async insert(lot: LotState): Promise<LotState> {

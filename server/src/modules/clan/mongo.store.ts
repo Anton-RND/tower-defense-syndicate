@@ -4,6 +4,7 @@ import { createConnection, type Connection } from 'mongoose';
 
 import { notFound } from '../../lib/errors.js';
 import { Logger, type LogLevel } from '../../lib/logger.js';
+import { createStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import { cloneClan, type ClanState } from './clan.types.js';
 import { createClanModel, toClan, toSetPayload, type ClanDoc, type ClanModel } from './mongo.model.js';
 import { ClanConflictError, DuplicateClanNameError, MAX_CLAN_TRANSACT_ATTEMPTS, type ClanStore } from './clan.store.js';
@@ -22,6 +23,7 @@ export class MongoClanStore implements ClanStore {
 
   private connection: Connection | null = null;
   private model: ClanModel | null = null;
+  private readonly counters = createStoreMetrics();
 
   constructor(
     private readonly uri: string,
@@ -69,19 +71,23 @@ export class MongoClanStore implements ClanStore {
   }
 
   async findById(id: string): Promise<ClanState | null> {
+    this.counters.read();
     const doc = (await this.db.findById(id).lean<ClanDoc | null>().exec()) as ClanDoc | null;
     return doc ? toClan(doc) : null;
   }
 
   async findByName(name: string): Promise<ClanState | null> {
+    this.counters.read();
     const doc = (await this.db.findOne({ name }).lean<ClanDoc | null>().exec()) as ClanDoc | null;
     return doc ? toClan(doc) : null;
   }
 
   async transact(id: string, reducer: (current: ClanState) => ClanState): Promise<ClanState> {
+    this.counters.transact();
     for (let attempt = 1; attempt <= MAX_CLAN_TRANSACT_ATTEMPTS; attempt++) {
       const doc = (await this.db.findById(id).lean<ClanDoc | null>().exec()) as ClanDoc | null;
       if (!doc) throw notFound(`Клан ${id} не найден`);
+      this.counters.read();
 
       const current = toClan(doc);
       const next = reducer(cloneClan(current));
@@ -91,11 +97,20 @@ export class MongoClanStore implements ClanStore {
       const res = await this.db
         .updateOne({ _id: current.id, revision: current.revision }, { $set: toSetPayload(next) })
         .exec();
-      if (res.matchedCount === 1) return next;
+      if (res.matchedCount === 1) {
+        this.counters.write();
+        return next;
+      }
 
+      this.counters.conflict(attempt);
       this.logger.debug('Конфликт версий клана, повторяем', { id, attempt, revision: current.revision });
     }
+    this.counters.abandon(MAX_CLAN_TRANSACT_ATTEMPTS);
     throw new ClanConflictError(id, MAX_CLAN_TRANSACT_ATTEMPTS);
+  }
+
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   async insert(clan: ClanState): Promise<ClanState> {

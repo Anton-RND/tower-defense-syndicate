@@ -2,6 +2,7 @@ import { createConnection, Schema, type Connection, type Model } from 'mongoose'
 
 import { notFound } from '../../lib/errors.js';
 import { Logger, type LogLevel } from '../../lib/logger.js';
+import { createNoopAwareStoreMetrics, type StoreMetricsSnapshot } from '../../lib/store.metrics.js';
 import { JUNK_IDS } from '../../config/workshop.js';
 import type { JunkId } from '../../config/workshop.js';
 import { cloneCommodity, type CommodityState } from './commodity.types.js';
@@ -88,6 +89,7 @@ export class MongoCommodityStore implements CommodityStore {
 
   private connection: Connection | null = null;
   private model: CommodityModel | null = null;
+  private readonly counters = createNoopAwareStoreMetrics();
 
   constructor(
     private readonly uri: string,
@@ -135,6 +137,7 @@ export class MongoCommodityStore implements CommodityStore {
   }
 
   async find(junk: JunkId): Promise<CommodityState | null> {
+    this.counters.read();
     const doc = (await this.db.findById(junk).lean<CommodityDoc | null>().exec()) as CommodityDoc | null;
     return doc ? toCommodity(doc) : null;
   }
@@ -153,22 +156,36 @@ export class MongoCommodityStore implements CommodityStore {
    * внутри паузы.
    */
   async transact(junk: JunkId, reducer: (current: CommodityState) => CommodityState): Promise<CommodityState> {
+    this.counters.transact();
     for (let attempt = 1; attempt <= MAX_COMMODITY_TRANSACT_ATTEMPTS; attempt++) {
       const doc = (await this.db.findById(junk).lean<CommodityDoc | null>().exec()) as CommodityDoc | null;
       if (!doc) throw notFound(`Товар ${junk} не найден`);
+      this.counters.read();
 
       const current = toCommodity(doc);
       const next = reducer(cloneCommodity(current));
       next.junk = current.junk;
+      // Ревизию ведёт редуктор, поэтому она — бесплатный признак холостого хода.
+      const noop = next.revision === current.revision;
 
       const res = await this.db
         .updateOne({ _id: junk, revision: current.revision }, { $set: toDoc(next) })
         .exec();
-      if (res.matchedCount === 1) return next;
+      if (noop) this.counters.noop();
+      if (res.matchedCount === 1) {
+        this.counters.write();
+        return next;
+      }
 
+      this.counters.conflict(attempt);
       this.logger.debug('Конфликт версий товара, повторяем', { junk, attempt, revision: current.revision });
     }
+    this.counters.abandon(MAX_COMMODITY_TRANSACT_ATTEMPTS);
     throw new CommodityConflictError(junk, MAX_COMMODITY_TRANSACT_ATTEMPTS);
+  }
+
+  metrics(): StoreMetricsSnapshot {
+    return this.counters.snapshot();
   }
 
   /**
