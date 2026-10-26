@@ -6,6 +6,10 @@ dist/
 .env.*.local
 coverage/
 .tmp/
+# Кэш бинарников интеграционных тестов (mongod для mongodb-memory-server). Нарочно ВНЕ
+# node_modules: `npm ci` стирает node_modules целиком, и кэш внутри него означал бы
+# загрузку десятков мегабайт посреди прогона после каждой чистой установки.
+.cache/
 .net.txt
 .envcheck.txt
 # Артефакты диагностических прогонов (смоук, tsc, vitest, err-поток dev-сервера).

@@ -66,25 +66,26 @@ const externalUri = process.env.TD_MONGO_URI ?? null;
 const disableMemory = process.env.TD_MONGO_MEMORY === 'off';
 
 /**
- * Каталог бинарника стенда — АБСОЛЮТНЫЙ и не зависящий от cwd.
+ * Каталог бинарника стенда — АБСОЛЮТНЫЙ, не зависящий от cwd и НЕ внутри node_modules.
  *
  * Ловушка, найденная этим прогоном: `mongodb-memory-server` якорит свой кэш на
  * ближайший `package.json` с секцией `config`, а ищет он ПОСЛЕДНИМ ШАГОМ ОТ cwd
- * ВВЕРХ. Монитор-процесс поднят из `server/` и находит
- * `server/node_modules/.cache/mongodb-memory-server/` с уже лежащим там
- * `mongod-x64-win32-8.2.6.exe`; тот же набор тестов, запущенный корнем
- * (`npm test` в корне репозитория), якоря не находит, уходит в глобальный
- * `%LOCALAPPDATA%` — и начинает скачивать 781 МБ посреди прогона.
+ * ВВЕРХ. Монитор-процесс поднят из `server/` и находит один каталог, тот же набор
+ * тестов, запущенный корнем (`npm test` в корне репозитория), — другой, и тогда
+ * стартует загрузка бинарника MongoDB посреди прогона: таймаут теста становится
+ * неотличим от зависшего подключения к базе.
  *
- * Отсюда два следствия, и оба хуже, чем «долго». Первое: прогон из корня висит
- * минуты, и это неотличимо от зависшего подключения к базе. Второе: прерванный
- * (по таймауту реда, по Ctrl+C) download оставляет в глобальном кэше `*.lock` и
- * `*.zip.downloading`, и каждый следующий прогон упирается в замок.
+ * Вторая ловушка — сам выбор места. Раньше кэш лежал в
+ * `server/node_modules/.cache/mongodb-memory-server/`, и из этого следовал запрет
+ * запускать `npm ci`: установка стирает `node_modules` целиком и уносила 74 МБ
+ * бинарника. Теперь кэш живёт в `<репозиторий>/.cache/`, вне `node_modules`, поэтому
+ * `npm ci` (и `npm install` с расходящимся деревом) безопасны: дерево пакетов
+ * пересоздаётся, бинарник остаётся.
  *
  * Путь от `import.meta.url` не зависит от cwd, поэтому корень и `server/`
  * получают один и тот же каталог и одно и то же попадание в кэш.
  */
-const STAND_BIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', '.cache', 'mongodb-memory-server');
+const STAND_BIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.cache', 'mongodb-memory-server');
 
 let memory: MongoMemoryServer | null = null;
 let uri: string | null = externalUri;

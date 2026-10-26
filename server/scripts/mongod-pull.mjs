@@ -12,6 +12,10 @@
  * свой кэш, прогон из корня репозитория — нет, и тогда стартует загрузка сотен
  * мегабайт посреди тестов. Один абсолютный путь на оба случая.
  *
+ * Каталог лежит в `<репозиторий>/.cache/`, а НЕ в `node_modules/.cache/`: `npm ci`
+ * стирает `node_modules` целиком и уносил бы бинарник, превращая каждую чистую
+ * установку в гонку «успеет ли тест до конца загрузки MongoDB».
+ *
  * Монитор-сервер поднимается и сразу гасится: нужен только факт кэша.
  *
  *   node scripts/mongod-pull.mjs
@@ -21,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
-const binDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', '.cache', 'mongodb-memory-server');
+const binDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.cache', 'mongodb-memory-server');
 
 const started = Date.now();
 const server = await MongoMemoryServer.create({ binary: { downloadDir: binDir } });
