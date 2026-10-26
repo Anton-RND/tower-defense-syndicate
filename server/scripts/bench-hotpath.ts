@@ -17,6 +17,7 @@
  * Запуск: `npm run bench` из каталога server (tsx, без сборки).
  */
 import { performance } from 'node:perf_hooks';
+import { gzipSync } from 'node:zlib';
 
 import { loadConfig } from '../src/config/env.js';
 import {
@@ -30,6 +31,7 @@ import {
 } from '../src/config/base.js';
 import { DEFAULT_SPEC, NEIGHBOR_OFFSETS, analyzeLayout, inBounds } from '../src/modules/pvp/grid.js';
 import { applyEconomyTick } from '../src/modules/economy/tick.js';
+import { describeEconomy } from '../src/modules/economy/view.js';
 import { settleBuilds } from '../src/modules/workshop/craft.js';
 import { voidExpiredOrders } from '../src/modules/payment/orders.js';
 import { describeBase, saveLayout } from '../src/modules/pvp/defense.js';
@@ -365,6 +367,17 @@ async function main(): Promise<void> {
   const json = JSON.stringify(payload);
   const bytes = Buffer.byteLength(json, 'utf8');
   console.log(`  toSetPayload → ${kb(bytes)}; инвентарь ${attacker.inventory.length}, стены ${attacker.base.walls.length}, ордера ${attacker.orders.length}`);
+  // Сжатие канала (R4). Клиенту уезжает НЕ документ, а витрина, поэтому и меряем её:
+  // это те самые байты, что платятся на каждом опросе. Число здесь, а не в комментарии
+  // к маршруту, потому что степень сжатия зависит от содержимого, а содержимое
+  // меняется вместе с балансом.
+  const viewJson = JSON.stringify(describeEconomy(attacker, T0, config));
+  const viewBytes = Buffer.byteLength(viewJson, 'utf8');
+  const viewGzipped = gzipSync(Buffer.from(viewJson, 'utf8')).length;
+  console.log(
+    `  витрина GET /v1/economy → ${kb(viewBytes)}; gzip ${kb(viewGzipped)} ` +
+      `(×${(viewBytes / viewGzipped).toFixed(1)}, экономия ${((1 - viewGzipped / viewBytes) * 100).toFixed(0)}%)`
+  );
   // Разбивка по полям: дельта-запись оправдана ровно настолько, насколько поле тяжёлое
   // и насколько часто его трогает редуктор. Без этой таблицы оптимизация — догадка.
   const weights = (Object.keys(payload) as Array<keyof typeof payload>)
