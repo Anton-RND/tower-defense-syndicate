@@ -6,11 +6,15 @@ import {
   TECH_LABEL
 } from '../../config/materials.js';
 import {
+  BUILD_CANCEL_GRACE_RATIO,
+  BUILD_CANCEL_REFUND_RATE,
   MAX_BUILD_QUEUE,
   MAX_INVENTORY_ITEMS,
   getBlueprint,
+  materialEntries,
   type Blueprint,
-  type ItemKind
+  type ItemKind,
+  type MaterialCost
 } from '../../config/workshop.js';
 import {
   MAX_STRUCTURE_TOTAL,
@@ -23,7 +27,7 @@ import {
 } from '../../config/structures.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
 import { effectiveBuildRobots } from '../economy/entitlements.js';
-import { payMaterials, spendSec, spendTech } from '../economy/wallet.js';
+import { credit, gainMaterials, payMaterials, resource, spendSec, spendTech } from '../economy/wallet.js';
 import { makeIdempotencyKey, type LedgerDraft } from '../ledger/ledger.types.js';
 import type { BuildJob, InventoryItem, StructureCounts, UserAccount } from '../user/user.types.js';
 
@@ -286,7 +290,10 @@ export function startBuild(
     kind: blueprint ? blueprint.kind : 'structure',
     level: 1,
     startedAt: now,
-    endsAt: new Date(now.getTime() + def.buildMs)
+    endsAt: new Date(now.getTime() + def.buildMs),
+    // Запоминаем кассу, а не ценник: отмена обязана вернуть ровно то, что списали,
+    // даже если к моменту отмены лестница сооружений успела подорожать.
+    secSpent: secPrice
   };
 
   const next: UserAccount = { ...accountAfterPay, builds: [...accountAfterPay.builds, job] };
@@ -303,6 +310,220 @@ export function startBuild(
   };
 }
 
+
+// ─── Отмена стройки (снятие работы из очереди) ────────────────────────────────
+
+/** Что возвращается при отмене: материалы и монета. */
+export interface BuildRefund {
+  materials: MaterialCost;
+  sec: number;
+}
+
+/** Причина отказа для UI — без бросания исключений на каждую отрисованную строку очереди. */
+export type CancelReason = 'ok' | 'not_found' | 'done';
+
+export interface CancelQuote {
+  jobId: string;
+  code: string | null;
+  /** Пройденная доля таймера, 0..1. */
+  progress: number;
+  /** Мс до конца льготного окна; 0 — окно закрыто и возврат уже урезанный. */
+  graceLeftMs: number;
+  /** Какую долю списанного вернёт отмена. Считает сервер: клиент, посчитавший своё, расходится с кассой. */
+  refundRate: number;
+  /** Материалы, которые приедут в кошелёк. */
+  materials: MaterialCost;
+  sec: number;
+  canCancel: boolean;
+  reason: CancelReason;
+}
+
+/**
+ * Сколько было списано на старт этой работы — база для возврата.
+ *
+ * Материалы берутся из конфига (`def.cost`): цена чертежа статична, и разбор готового
+ * предмета (`salvageYield`) выводит её оттуда же — два соседних механизма обязаны
+ * считать одинаково, иначе «отменил» и «разобрал» вернули бы разные суммы за одну и ту
+ * же стойку. Монета — единственное исключение: её цена зависит от числа уже стоящих
+ * экземпляров, поэтому используется запомненный на старте факт `job.secSpent`, а
+ * лестница выступает фолбэком для документов старше этого поля.
+ */
+function buildCharge(job: BuildJob, account: UserAccount): BuildRefund {
+  const blueprint = getBlueprint(job.code);
+  const structure = blueprint ? null : getStructure(job.code);
+  const def = blueprint ?? structure;
+
+  const materials: MaterialCost = {};
+  for (const [id, amount] of materialEntries(def ? def.cost : {})) materials[id] = amount;
+
+  let sec = job.secSpent ?? 0;
+  if (job.secSpent === undefined && structure) {
+    sec = structureSecCost(structure, account.structures[structure.id] ?? 0);
+  }
+  return { materials, sec };
+}
+
+/** Пройденная доля таймера и состояние льготного окна на момент `now`. */
+function cancelTerms(job: BuildJob, now: Date): { progress: number; graceLeftMs: number; rate: number } {
+  const start = job.startedAt.getTime();
+  // Знаменатель не нулевой: работа с `endsAt === startedAt` уже догнана очередью и сюда
+  // не доходит (requireActiveJob), но деление на 0 отравило бы прогресс NaN-ом.
+  const total = Math.max(1, job.endsAt.getTime() - start);
+  const elapsed = now.getTime() - start;
+  const progress = Math.min(1, Math.max(0, elapsed / total));
+  const graceMs = total * BUILD_CANCEL_GRACE_RATIO;
+  // Граница входит в льготу: «не дальше 25%» — это ≤ 25%. Игрок, отменивший стройку
+  // ровно на четвёртой минуте десятиминутки, не обязан получать штраф из порядка
+  // сравнения чисел с плавающей точкой.
+  return {
+    progress,
+    graceLeftMs: Math.max(0, graceMs - elapsed),
+    rate: elapsed <= graceMs ? 1 : BUILD_CANCEL_REFUND_RATE
+  };
+}
+
+/** Умножает цену на долю возврата, округляя ВНИЗ: округление вверх превратило бы штраф в прибыль. */
+function scaleCost(cost: MaterialCost, rate: number): MaterialCost {
+  const result: MaterialCost = {};
+  for (const [id, amount] of materialEntries(cost)) {
+    const value = Math.floor(amount * rate);
+    if (value > 0) result[id] = value;
+  }
+  return result;
+}
+
+/**
+ * Пресет кнопки «Отменить»: что вернётся, если нажать прямо сейчас.
+ *
+ * Исключений не бросает никогда: витрина зовёт его на каждый ряд очереди при каждой
+ * отрисовке (см. `BuildView.cancel` в modules/economy/view.ts).
+ */
+export function describeCancel(account: UserAccount, jobId: string, now: Date): CancelQuote {
+  const job = account.builds.find((candidate) => candidate.id === jobId);
+  const refusal = (progress: number, reason: CancelReason): CancelQuote => ({
+    jobId,
+    code: job?.code ?? null,
+    progress,
+    graceLeftMs: 0,
+    refundRate: 0,
+    materials: {},
+    sec: 0,
+    canCancel: false,
+    reason
+  });
+
+  if (!job) return refusal(0, 'not_found');
+  // Дозревшая работа — не отмена, а выдача результата: её заберёт любой settle.
+  // Вернуть здесь материалы значило бы «заплатил один раз, получил дважды».
+  if (job.endsAt.getTime() <= now.getTime()) return refusal(1, 'done');
+
+  const terms = cancelTerms(job, now);
+  const charge = buildCharge(job, account);
+  return {
+    jobId: job.id,
+    code: job.code,
+    progress: Math.round(terms.progress * 1000) / 1000,
+    graceLeftMs: terms.graceLeftMs,
+    refundRate: terms.rate,
+    materials: scaleCost(charge.materials, terms.rate),
+    sec: Math.floor(charge.sec * terms.rate),
+    canCancel: true,
+    reason: 'ok'
+  };
+}
+
+export interface CancelBuildResult {
+  account: UserAccount;
+  drafts: LedgerDraft[];
+  /** Отменённая работа — уже вне очереди. */
+  job: BuildJob;
+  /** Что реально вернулось (после доли возврата). */
+  refund: BuildRefund;
+  /** Доля списанного, которую составил возврат: 1 — льготное окно. */
+  rate: number;
+  /** true — отмена попала в льготное окно (для журнала и для лога игрока). */
+  grace: boolean;
+  busyAfter: number;
+  freeAfter: number;
+}
+
+/**
+ * Отменить стройку: снять работу из очереди, освободить робота и вернуть списанное.
+ *
+ * Доля возврата зависит от пройденного таймера (config/workshop.ts): пока работа не
+ * перешагнула `BUILD_CANCEL_GRACE_RATIO`, возвращается всё — это «ошибка пальца»;
+ * дальше возвращается `BUILD_CANCEL_REFUND_RATE`. Момент сравнивается с `now`,
+ * который приносит HTTP-слой, а не с часами домена: иначе ретрай того же запроса
+ * превратил бы льготную отмену штрафной ровно на секунде границы.
+ *
+ * Порядок шагов: сначала работа снимается с очереди, потом начисляется возврат.
+ * Начисление — единственный этап, способный бросить, и очередь к этому моменту уже
+ * чиста: повторный запрос честнее встретить ошибкой «стройки нет в очереди», чем
+ * вторым возвратом. Потолок склада материалов здесь не проверяется намеренно: возврат
+ * всегда не больше списанного, значит дефицита он не создаёт никогда.
+ */
+export function cancelBuild(
+  account: UserAccount,
+  jobId: string,
+  now: Date,
+  idFactory: () => string
+): CancelBuildResult {
+  // Догон очереди первым делом: завершившуюся работу отменять нельзя — её результат
+  // уже произведён (тот же порядок, что у applyChroniumSpeedup).
+  const base = settleBuilds(account, now, idFactory).account;
+  const job = requireActiveJob(base, jobId, now);
+
+  const terms = cancelTerms(job, now);
+  const charge = buildCharge(job, base);
+  const refund: BuildRefund = {
+    materials: scaleCost(charge.materials, terms.rate),
+    sec: Math.floor(charge.sec * terms.rate)
+  };
+
+  const withoutJob: UserAccount = { ...base, builds: base.builds.filter((candidate) => candidate.id !== jobId) };
+
+  const ctxBase = {
+    ts: now,
+    reason: 'build_cancel' as const,
+    refType: 'build_job' as const,
+    refId: job.id,
+    meta: {
+      code: job.code,
+      kind: job.kind,
+      rate: terms.rate,
+      progress: Math.round(terms.progress * 1000) / 1000,
+      grace: terms.graceLeftMs > 0
+    }
+  };
+  // Ключ обязан включать валюту — инвариант №1 журнала (modules/ledger/ledger.types.ts):
+  // пачка материалов одним ключом потеряла бы все движения, кроме первого.
+  const gained = gainMaterials(withoutJob, refund.materials, {
+    ...ctxBase,
+    idempotencyKeyFor: (id) => makeIdempotencyKey('build', `${job.id}:cancel:${id}`)
+  });
+
+  const drafts = [...gained.drafts];
+  let next = gained.account;
+  if (refund.sec > 0) {
+    const coin = credit(next, resource('sec'), refund.sec, {
+      ...ctxBase,
+      idempotencyKey: makeIdempotencyKey('build', `${job.id}:cancel:sec`)
+    });
+    next = coin.account;
+    drafts.push(coin.draft);
+  }
+
+  return {
+    account: next,
+    drafts,
+    job,
+    refund,
+    rate: terms.rate,
+    grace: terms.graceLeftMs > 0,
+    busyAfter: buildersBusy(next, now),
+    freeAfter: buildersFree(next, now)
+  };
+}
 
 // ─── Мгновенное ускорение стройки (хрониум) ────────────────────────────────────
 

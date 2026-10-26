@@ -27,9 +27,11 @@ import {
   buildersBusy,
   buildersFree,
   buildersMax,
+  describeCancel,
   describeSpeedup,
   describeSpeedupAll,
   nextBuilderFreeAt,
+  type CancelQuote,
   type SpeedupAllQuote,
   type SpeedupQuote
 } from '../workshop/craft.js';
@@ -227,6 +229,14 @@ export interface BuildView {
   done: boolean;
   /** Цена и доступность кнопки «Ускорить» для этой работы — расчёт сервера, не клиента. */
   speedup: SpeedupQuote;
+  /**
+   * Что вернёт отмена прямо сейчас: доля возврата, остаток льготного окна и суммы.
+   *
+   * Считает сервер, а не клиент, по той же причине, что и `speedup`: игрок обязан
+   * видеть те цифры, по которым касса проведёт возврат, а не свою оценку прогресса
+   * по таймеру, который успел уехать после ускорения хронием.
+   */
+  cancel: CancelQuote;
 }
 
 /** Правила и состояние кнопки «Ускорить всё» (пачка). */
@@ -674,7 +684,8 @@ export function describeEconomy(account: UserAccount, now: Date, config: AppConf
       endsAt: job.endsAt,
       remainingMs: Math.max(0, job.endsAt.getTime() - now.getTime()),
       done: job.endsAt.getTime() <= now.getTime(),
-      speedup: describeSpeedup(account, job.id, now)
+      speedup: describeSpeedup(account, job.id, now),
+      cancel: describeCancel(account, job.id, now)
     })),
     speedup: {
       msPerChronium: CHRONIUM_MS_PER_UNIT,

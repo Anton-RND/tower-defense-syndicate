@@ -11,62 +11,121 @@
     --warn: #e6b24a; --err: #e2685f; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--mono); }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 12px/1.35 var(--mono); }
   header {
-    position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px;
-    align-items: center; padding: 10px 14px; background: var(--panel2); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 6px;
+    align-items: center; padding: 6px 10px; background: var(--panel2); border-bottom: 1px solid var(--line);
   }
   .brand { font-weight: 700; letter-spacing: .5px; }
   .brand span { color: var(--accent); font-weight: 400; }
   header .spacer { flex: 1; }
   input, select, button { font: inherit; color: inherit; }
-  input, select { background: #0f141b; border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
-  input[type=number] { width: 72px; }
-  button { background: #22303f; border: 1px solid #33465c; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  input, select { background: #0f141b; border: 1px solid var(--line); border-radius: 4px; padding: 2px 5px; }
+  input[type=number] { width: 62px; }
+  button { background: #22303f; border: 1px solid #33465c; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
   button:hover { background: #2c3f53; }
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.on { background: #1e3527; border-color: #2f6b45; color: #9ae8bb; }
   button.err { background: #3a2220; border-color: #6b2f2a; }
   a.link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
-  .wallet { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; white-space: nowrap; }
+  .wallet { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; font-size: 11px; white-space: nowrap; }
   .chip b { color: var(--accent); }
   .chip.neg b { color: var(--err); }
   .chip small { color: var(--muted); }
-  main { display: grid; grid-template-columns: minmax(540px, 1fr) minmax(330px, 400px); gap: 12px; padding: 12px 14px 40px; align-items: start; }
-  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; margin-bottom: 12px; }
+  /* Левый трек назначает САМ СКРИПТ (`--board-w` = ширина холста + обвес панели).
+     Поле квадратное и на любых разумных экранах упирается в высоту, поэтому `1fr`
+     здесь означал бы вечные 200+ px мёртвой полосы по бокам карты: всё, что поле не
+     забрало, отдаётся правой колонке. Фолбэк нужен до первого /v1/config. */
+  main { display: grid; grid-template-columns: var(--board-w, minmax(360px, 1fr)) minmax(320px, 1fr); gap: 8px; padding: 8px 10px 24px; align-items: start; }
+  /* Панели — МУЛЬТИКОЛОНКА, а не сетка строк. Сетка `repeat(auto-fill, …)` выравнивала
+     каждую строку по самому высокому блоку: под «Инвентарём» из двух строк зияло 200 px
+     пустоты рядом с «Планировкой», и свободное место просто переехало из-под карты сюда.
+     `columns` упаковывает блоки вплотную по высоте столбца; `break-inside: avoid` —
+     панель не рвётся на два столбца. Цена: при раскрытии панели перетекают между
+     столбцами, что заметно дешевле вечных дыр. */
+  aside { columns: 320px; column-gap: 8px; }
+  aside > .panel { break-inside: avoid; -webkit-column-break-inside: avoid; }
+  @media (max-width: 900px) {
+    /* minmax(0,1fr), а не 1fr: автоматический минимум трека равен min-content, и
+       холст своими 500+ px растягивал бы трек за край окна (полоса горизонтального
+       скролла на телефоне). Нулевой минимум позволяет полю ужаться до ширины экрана. */
+    main { grid-template-columns: minmax(0, 1fr); }
+    aside { columns: 1; }
+  }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; margin-bottom: 8px; }
   .panel > h2 {
-    margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
-    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
   }
   .panel > h2 .tag { color: var(--accent); text-transform: none; letter-spacing: 0; }
-  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  /* Сворачиваемые панели: правая колонка держит десять блоков, и на экране высотой
+     900px они не помещаются ни при какой плотности. `details` вместо самописного
+     аккордеона: состояние открыт/закрыт даёт браузер, а не ещё один обработчик кликов. */
+  details.panel { padding: 0; }
+  details.panel > summary {
+    list-style: none; cursor: pointer; user-select: none; padding: 6px 8px; margin: 0;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  details.panel > summary::-webkit-details-marker { display: none; }
+  details.panel > summary::before { content: '\25b8'; color: var(--accent); }
+  details.panel[open] > summary::before { content: '\25be'; }
+  details.panel > summary .tag { color: var(--accent); text-transform: none; letter-spacing: 0; }
+  details.panel > .panelBody {
+    padding: 0 8px 7px;
+    /* Таблица энергосети (7 колонок) имеет min-content ~490px, и на узком окне она
+       раздувала УЖЕ ВЕСЬ ДОКУМЕНТ: вьюпорт обязан расшириться до min-content страницы,
+       поэтому вместо подгонки получался горизонтальный скролл всей игры.
+       `overflow-x:auto` делает прокрутку делом одной панели, а не документа. */
+    overflow-x: auto;
+  }
+  main > section, aside { min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; }
   td.num, th.num { text-align: right; }
-  .list { max-height: 230px; overflow: auto; }
+  .list { max-height: 170px; overflow: auto; }
   .muted { color: var(--muted); }
   .ok { color: var(--ok); }
   .warn { color: var(--warn); }
   .err { color: var(--err); }
-  .hint { color: var(--muted); font-size: 11px; margin: 4px 0 0; }
-  #board { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
-  #toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
-  #viewbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
-  #viewbar button { padding: 3px 8px; font-size: 12px; }
+  .hint { color: var(--muted); font-size: 10px; margin: 3px 0 0; }
+  #board { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  /* Инструменты и слои — ОДИН ряд: каждая лишняя строка тулбара отнимает у поля
+     26 px высоты, до которой оно всегда дотягивало. Подсказка про ЛКМ/ПКМ уехала в
+     панель «Планировка» (`#pickHint`): здесь она ломала ряд пополам. */
+  #toolbar { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; margin-bottom: 5px; }
+  #toolbar button { padding: 2px 5px; font-size: 11px; }
+  #toolbar .spacer { flex: 1 1 auto; }
+  #toolbar .sep { flex: none; width: 1px; align-self: stretch; background: var(--line); margin: 1px 2px; }
   #cvWrap { display: flex; justify-content: center; }
   canvas { background: #080b0f; border: 1px solid var(--line); border-radius: 4px; touch-action: none; max-width: 100%; }
-  #analysis { margin-top: 8px; font-size: 12px; }
-  #replay { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
-  #rpScrub { width: 100%; padding: 0; }
-  #rpEvents { max-height: 120px; overflow: auto; font-size: 11px; color: var(--muted); margin-top: 6px; white-space: pre-wrap; }
-  #log {
-    background: #080b0f; border: 1px solid var(--line); border-radius: 6px; margin-top: 6px;
-    padding: 8px; height: 170px; overflow: auto; font-size: 11px; white-space: pre-wrap; word-break: break-word;
+  /* Строка состояния — ровно ДВЕ строки: приговор и цифры. Третья строка стоила полю
+     ещё 14 px, поэтому стоимость стен здесь сжата до «+0/−0 → 0⛏ 0■». */
+  #analysis { margin-top: 4px; font-size: 10px; line-height: 1.35; }
+  /* Реплей — сворачиваемый блок. Без боя он держал ~130 px высоты, которую поле не
+     могло допросить; теперь блок закрыт, пока игра сама не принесла таймлайн, и
+     освобождённая высота сразу уходит карте (см. `toggle`-слушатель в bindResize). */
+  #replay { margin-top: 6px; border-top: 1px solid var(--line); }
+  #replay > summary {
+    list-style: none; cursor: pointer; user-select: none; padding: 5px 0; margin: 0;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
   }
-  .pill { border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; font-size: 11px; color: var(--muted); }
+  #replay > summary::-webkit-details-marker { display: none; }
+  #replay > summary::before { content: '\25b8'; color: var(--accent); }
+  #replay[open] > summary::before { content: '\25be'; }
+  #replay > summary .tag { color: var(--accent); text-transform: none; letter-spacing: 0; }
+  #replay > .replayBody { padding-bottom: 2px; }
+  #rpScrub { width: 100%; padding: 0; }
+  #rpEvents { max-height: 90px; overflow: auto; font-size: 10px; color: var(--muted); margin-top: 4px; white-space: pre-wrap; }
+  #log {
+    background: #080b0f; border: 1px solid var(--line); border-radius: 6px; margin-top: 4px;
+    padding: 6px; height: 110px; overflow: auto; font-size: 10px; white-space: pre-wrap; word-break: break-word;
+  }
+  .pill { border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 10px; color: var(--muted); }
   .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
 </style>
 </head>
@@ -92,45 +151,42 @@
       <button data-tool="tower">Башня</button>
       <button data-tool="hq">Штаб</button>
       <button data-tool="erase" class="err">Снести</button>
-      <div class="spacer"></div>
-      <span class="pill" id="pickHint">ЛКМ — поставить, ПКМ — убрать</span>
-    </div>
-
-    <div id="viewbar">
-      <span class="muted">слои:</span>
-      <button id="viewStyle" title="Векторная графика / плоская схема (диагностика)">Арт</button>
-      <button id="viewGrid" class="on" title="Сетка клеток">Сетка</button>
-      <button id="viewRanges" title="Радиусы башен и дронов">Радиусы</button>
-      <button id="viewAnim" class="on" title="Частицы, дым, вращение винтов">Анимация</button>
+      <span class="sep" title="слои изображения"></span>
+      <button id="viewStyle" title="Слои: векторная графика / плоская схема (диагностика)">Арт</button>
+      <button id="viewGrid" class="on" title="Слой: сетка клеток">Сетка</button>
+      <button id="viewRanges" title="Слой: радиусы башен и дронов">Радиусы</button>
+      <button id="viewAnim" class="on" title="Слой: частицы, дым, вращение винтов">Анимация</button>
     </div>
 
     <div id="cvWrap"><canvas id="cv" width="536" height="536"></canvas></div>
     <div id="analysis" class="muted">войдите, чтобы увидеть поле</div>
 
-    <div id="replay">
-      <div class="row">
-        <b class="muted" style="font-size:12px;letter-spacing:.8px">РЕПЛЕЙ БОЯ</b>
-        <button id="rpPlay" disabled>&#9654; Играть</button>
-        <button id="rpBack" disabled>&#9198;</button>
-        <button id="rpRate" disabled>1&times;</button>
-        <span class="pill" id="rpClock">&mdash;</span>
+    <details id="replay">
+      <summary>Реплей боя <span class="tag" id="rpTag">нет боя</span></summary>
+      <div class="replayBody">
+        <div class="row">
+          <button id="rpPlay" disabled>&#9654; Играть</button>
+          <button id="rpBack" disabled>&#9198;</button>
+          <button id="rpRate" disabled>1&times;</button>
+          <span class="pill" id="rpClock">&mdash;</span>
+        </div>
+        <input id="rpScrub" type="range" min="0" max="0" value="0" step="1" disabled>
+        <div id="rpEvents" class="muted">Сыграйте рейд в панели PvP справа: сервер отдаёт кадры боя, и они проигрываются здесь.</div>
       </div>
-      <input id="rpScrub" type="range" min="0" max="0" value="0" step="1" disabled>
-      <div id="rpEvents" class="muted">Сыграйте рейд в панели PvP справа: сервер отдаёт кадры боя, и они проигрываются здесь.</div>
-    </div>
+    </details>
   </section>
 
   <aside>
-    <div class="panel"><h2>Планировка <span class="tag" id="baseTag">&mdash;</span></h2><div id="baseBody" class="muted">&mdash;</div></div>
-    <div class="panel"><h2>Инвентарь <span class="tag" id="invTag">0</span></h2><div id="invBody" class="list muted">&mdash;</div></div>
-    <div class="panel"><h2>Мастерская <span class="tag" id="shopTag">0/0</span></h2><div id="shopBody">&mdash;</div></div>
-    <div class="panel"><h2>Экономика <span class="tag" id="ecoTag">&mdash;</span></h2><div id="ecoBody">&mdash;</div></div>
-    <div class="panel"><h2>Энергосеть <span class="tag" id="pwrTag">&mdash;</span></h2><div id="pwrBody" class="muted">&mdash;</div></div>
-    <div class="panel"><h2>Оборона <span class="tag" id="defTag">&mdash;</span></h2><div id="defBody">&mdash;</div></div>
-    <div class="panel"><h2>PvP <span class="tag" id="pvpTag">&mdash;</span></h2><div id="pvpBody">&mdash;</div></div>
-    <div class="panel"><h2>Клан <span class="tag" id="clanTag">&mdash;</span></h2><div id="clanBody">&mdash;</div></div>
-    <div class="panel"><h2>Рынок <span class="tag" id="mktTag">&mdash;</span></h2><div id="mktBody">&mdash;</div></div>
-    <div class="panel"><h2>Журнал</h2><div id="log"></div></div>
+    <details class="panel" id="pnlBase" open><summary>Планировка <span class="tag" id="baseTag">&mdash;</span></summary><div class="panelBody" id="baseBody">&mdash;</div></details>
+    <details class="panel" id="pnlInv" open><summary>Инвентарь <span class="tag" id="invTag">0</span></summary><div class="panelBody list muted" id="invBody">&mdash;</div></details>
+    <details class="panel" id="pnlShop" open><summary>Мастерская <span class="tag" id="shopTag">0/0</span></summary><div class="panelBody" id="shopBody">&mdash;</div></details>
+    <details class="panel" id="pnlEco" open><summary>Экономика <span class="tag" id="ecoTag">&mdash;</span></summary><div class="panelBody" id="ecoBody">&mdash;</div></details>
+    <details class="panel" id="pnlPwr"><summary>Энергосеть <span class="tag" id="pwrTag">&mdash;</span></summary><div class="panelBody muted" id="pwrBody">&mdash;</div></details>
+    <details class="panel" id="pnlDef"><summary>Оборона <span class="tag" id="defTag">&mdash;</span></summary><div class="panelBody" id="defBody">&mdash;</div></details>
+    <details class="panel" id="pnlPvp"><summary>PvP <span class="tag" id="pvpTag">&mdash;</span></summary><div class="panelBody" id="pvpBody">&mdash;</div></details>
+    <details class="panel" id="pnlClan"><summary>Клан <span class="tag" id="clanTag">&mdash;</span></summary><div class="panelBody" id="clanBody">&mdash;</div></details>
+    <details class="panel" id="pnlMkt"><summary>Рынок <span class="tag" id="mktTag">&mdash;</span></summary><div class="panelBody" id="mktBody">&mdash;</div></details>
+    <details class="panel" id="pnlLog" open><summary>Журнал</summary><div class="panelBody" id="log"></div></details>
   </aside>
 </main>
 
@@ -720,7 +776,7 @@ function issueText(issue) {
 // ─── Отрисовка поля ──────────────────────────────────────────────────────────
 
 const VIEW = {
-  pad: 14, cell: 34, dpr: 1, ctx: null, size: 0,
+  pad: 10, cell: 34, dpr: 1, ctx: null, size: 0,
   style: 'art',   // 'art' — векторные модели, 'schema' — плоские кружки и квадраты (диагностика)
   grid: true,     // сетка клеток поверх грунта
   ranges: false,  // радиусы всех башен сразу, а не только под курсором
@@ -977,9 +1033,85 @@ const MAT = {
   hazard: '#e2b93b', sandbag: '#9a8a5f'
 };
 
-function setupCanvas() {
+/**
+ * Границы шага клетки, px.
+ *
+ * ПОТОЛОК 44, а не прежние 34: поле ограничено высотой, и на экране 1920×1080 клетка
+ * 34px оставляла под картой полэкрана пустоты — ровно та жалоба, только с другой оси.
+ * Вся векторная графика масштабируется от VIEW.cell (стволы, платформы, бейджи, шрифты),
+ * поэтому потолок влияет только на плотность, а не на читаемость: 44px — это ещё «техника»,
+ * 55px — уже плакат. НИЗ — 15px: на 390-пиксельном экране телефона поле остаётся
+ * различимым, а клики ловятся `cellFromEvent` по фактической ширине холста.
+ */
+const CELL_MIN = 15;
+const CELL_MAX = 44;
+
+/**
+ * Горизонтальный обвес, который поле обязано оставить чужому.
+ *
+ * `ASIDE_MIN` — та же цифра, что стоит в CSS у правой колонки (`columns: 320px`);
+ * разъехаться с ней значит либо вернуть мёртвую полосу, либо перегнать панели за край
+ * окна. `BOARD_X` — padding + border самой панели `#board`: трек `--board-w` включает
+ * их, холст — нет.
+ */
+const ASIDE_MIN = 320;
+const BOARD_X = 8 * 2 + 1 * 2;
+const MAIN_PAD = 10 * 2;
+const MAIN_GAP = 8;
+
+/** Двухколоночная раскладка сейчас или панели уже легли стопкой? Зеркало CSS-медиазапроса. */
+const stacked = () => window.matchMedia('(max-width: 900px)').matches;
+
+/**
+ * Ширина, на которую поле может претендовать.
+ *
+ * ЦЕЛИКОМ АНАЛИТИЧЕСКИ, включая узкое окно. Живой замер `cvWrap.clientWidth` здесь
+ * запрещён не педантизмом, а найденной петлёй: холст вносит свою ширину в min-content
+ * грид-трека, трек — в clientWidth обёртки, обёртка — в следующий размер холста.
+ * На 390px это давало трек 470px, то есть горизонтальный скролл вместо подгонки.
+ * Окно — единственный размер в вёрстке, который от холста не зависит.
+ */
+function widthBudget() {
+  const view = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);
+  const reserve = MAIN_PAD + BOARD_X + (stacked() ? 0 : MAIN_GAP + ASIDE_MIN);
+  return Math.max(CELL_MIN * Math.max(GW(), GH()), view - reserve);
+}
+
+/**
+ * Шаг клетки под место, которое реально есть на экране.
+ *
+ * Раньше поле рисовалось фиксированным шагом 34px: на ноутбуке 1366×768 оно вместе
+ * с шапкой, кошельком, двумя панелями инструментов и реплеем уходило за нижний край,
+ * и игрок видел половину карты. Поле — главный рабочий инструмент, поэтому оно добирает
+ * остаток экрана, а не спорит за него с панелями; всё, что не помещается, сворачивается.
+ *
+ * Высота считается по факту, а не по воображаемым отступам: над полем лежит то, что
+ * действительно отрисовано (шапка, кошелёк, тулбар), под ним — строка состояния и
+ * реплей (его свёрнутая шапка стоит 26px вместо 130px). Любое изменение вёрстки здесь
+ * учитывается без правки константы.
+ */
+function measureCell() {
+  const span = Math.max(GW(), GH());
+  const wrap = $('cvWrap');
+  if (!wrap || !span) return CELL_MAX;
+
+  const availW = widthBudget() - VIEW.pad * 2;
+  const below = ($('analysis').offsetHeight || 0) + ($('replay').offsetHeight || 0) + 16;
+  const availH = window.innerHeight - wrap.offsetTop - below - VIEW.pad * 2;
+
+  const avail = Math.max(CELL_MIN * span, Math.min(availW, availH));
+  return Math.max(CELL_MIN, Math.min(CELL_MAX, Math.floor(avail / span)));
+}
+
+/** Посадить левый трек грида по холсту: ни пикселя мёртвой полосы вокруг карты. */
+function applyBoardTrack(size) {
+  document.documentElement.style.setProperty('--board-w', (size + BOARD_X) + 'px');
+}
+
+function applyCanvas(cell) {
   const cv = $('cv');
-  const size = Math.max(GW(), GH()) * VIEW.cell + VIEW.pad * 2;
+  VIEW.cell = cell;
+  const size = Math.max(GW(), GH()) * cell + VIEW.pad * 2;
   VIEW.dpr = Math.min(2, window.devicePixelRatio || 1);
   cv.width = Math.round(size * VIEW.dpr);
   cv.height = Math.round(size * VIEW.dpr);
@@ -988,8 +1120,36 @@ function setupCanvas() {
   VIEW.ctx = cv.getContext('2d');
   VIEW.ctx.setTransform(VIEW.dpr, 0, 0, VIEW.dpr, 0, 0);
   VIEW.size = size;
+  applyBoardTrack(size);
   TERRAIN.key = '';            // статика перерисовывается под новый холст
   TERRAIN.canvas = null;
+}
+
+/**
+ * Пересборка поля в ДВА прохода.
+ *
+ * Один проход не сходится: ширина трека определяет, в сколько строк свернётся тулбар,
+ * число строк определяет `wrap.offsetTop`, а по нему считается высота поля. Первый
+ * проход назначает трек, второй измеряет уже то, что этот трек породил. Третьим
+ * незачем: бюджет ширины аналитический и от размера холста не зависит.
+ */
+function setupCanvas() {
+  applyCanvas(measureCell());
+  const corrected = measureCell();
+  if (corrected !== VIEW.cell) applyCanvas(corrected);
+}
+
+/**
+ * Заново подогнать поле под текущую вёрстку и перерисовать.
+ *
+ * Нужно не только на resize: сворачивание реплея освобождает ~100 px высоты, и если
+ * поле этим не воспользуется немедленно, экономия превратится в ту самую мёртвую
+ * полосу, только вертикальную.
+ */
+function relayoutBoard() {
+  if (!S.cfg) return;                 // до /v1/config геометрии поля нет
+  setupCanvas();
+  draw();
 }
 
 const px = (value) => VIEW.pad + value * VIEW.cell;
@@ -2100,29 +2260,41 @@ function cellAllowed(draft, x, y) {
 
 // ─── Строка состояния под полем ──────────────────────────────────────────────
 
+/**
+ * Итог предпросмотра под картой: ровно две строки.
+ *
+ * Первая — вердикт серверных правил проходимости (можно сохранять или нет), вторая —
+ * цифры, по которым этот вердикт вынесен. Третьей строки здесь нет намеренно: каждая
+ * строка отнимает 14 px у поля, а поле на типовом ноутбуке ограничено именно высотой.
+ * Стоимость стен сжата до «+0/−0 → 0⛏ 0■»; развёрнутая та же цифра лежит в панели
+ * «Планировка».
+ */
 function renderAnalysis() {
   const box = $('analysis');
   if (!S.draft) { box.innerHTML = '<span class="muted">войдите, чтобы увидеть поле</span>'; return; }
   const analysis = analyzeLayout(S.draft);
-  const parts = [];
 
-  parts.push(analysis.ok
+  const verdict = [];
+  verdict.push(analysis.ok
     ? '<span class="ok">проходимо</span>'
     : '<span class="err">' + analysis.violations.map((code) => esc(issueText(code))).join('; ') + '</span>');
   if (analysis.warnings.length) {
-    parts.push('<span class="warn">' + analysis.warnings.map((code) => esc(issueText(code))).join('; ') + '</span>');
+    verdict.push('<span class="warn">' + analysis.warnings.map((code) => esc(issueText(code))).join('; ') + '</span>');
   }
-  parts.push('<span class="muted">худший подход: ' + (analysis.pathTiles < 0 ? 'нет пути' : analysis.pathTiles + ' кл') +
-    ' · ворота ' + analysis.connectedSpawns + '/' + analysis.totalSpawns +
-    ' · карманы: ' + analysis.orphans + '</span>');
-  if (S.dirty) parts.push('<span class="warn">не сохранено</span>');
+  if (S.dirty) verdict.push('<span class="warn">не сохранено</span>');
 
   const delta = layoutDelta(S.draft);
   const cost = wallCost();
-  parts.push('<span class="muted">стен +' + delta.added + '/−' + delta.removed +
-    ' → ' + fmtNum(cost.ferrum * delta.added) + ' железа, ' + fmtNum(cost.black_metal * delta.added) + ' чёрмета</span>');
+  const facts = [
+    'худший подход: ' + (analysis.pathTiles < 0 ? 'нет пути' : analysis.pathTiles + ' кл'),
+    'ворота ' + analysis.connectedSpawns + '/' + analysis.totalSpawns,
+    'карманы: ' + analysis.orphans,
+    'стены +' + delta.added + '/−' + delta.removed + ' → ' +
+      fmtNum(cost.ferrum * delta.added) + '⛏ ' + fmtNum(cost.black_metal * delta.added) + '■'
+  ];
 
-  box.innerHTML = parts.join(' · ');
+  box.innerHTML = '<div>' + verdict.join(' · ') + '</div>' +
+    '<div class="muted">' + facts.map((fact) => esc(fact)).join(' · ') + '</div>';
 }
 
 // ─── Редактор планировки ────────────────────────────────────────────────────
@@ -2257,8 +2429,14 @@ function revertLayout() {
 
 function cellFromEvent(event) {
   const box = $('cv').getBoundingClientRect();
-  const x = Math.floor((event.clientX - box.left - VIEW.pad) / VIEW.cell);
-  const y = Math.floor((event.clientY - box.top - VIEW.pad) / VIEW.cell);
+  // Холст умеет ужиматься через `max-width:100%` — это происходит в те самые 150 мс,
+  // пока идёт дебаунс пересчёта клетки. Шаг поэтому берётся из фактической ширины,
+  // а не из VIEW.cell: иначе клик в этот момент попадал бы в соседнюю клетку, и
+  // игрок списывал бы материалы на не той клетке.
+  const scale = VIEW.size > 0 ? box.width / VIEW.size : 1;
+  const cell = VIEW.cell * scale;
+  const x = Math.floor((event.clientX - box.left - VIEW.pad * scale) / cell);
+  const y = Math.floor((event.clientY - box.top - VIEW.pad * scale) / cell);
   return inBounds(x, y) ? { x, y } : null;
 }
 
@@ -2330,7 +2508,11 @@ function renderBasePanel() {
     '<button ' + (S.dirty ? '' : 'disabled') + ' onclick="TD.revert()">Отменить</button>' +
     '<button class="err" onclick="TD.clear()">Снять всё</button>' +
     '</div>' +
-    '<p class="hint">Синяя линия — худший из кратчайших маршрутов от ворот до штаба. Чем длиннее, тем больше времени у башен.</p>';
+    // Подсказка про мышь переехала из тулбара сюда: в тулбаре она ломала ряд на вторую
+    // строку, отнимая у поля 26 px. Здесь же — единственный источник правды о текущем
+    // инструменте, и на мобильном WebView ВКонтакте она видна (tooltip'а нет).
+    '<p class="hint" id="pickHint">' + esc(TOOL_HINT[S.tool] || '') + '</p>' +
+    '<p class="hint">Дорога — худший из кратчайших маршрутов от ворот до штаба. Чем длиннее, тем больше времени у башен.</p>';
 }
 
 function row(label, value) {
@@ -2376,6 +2558,23 @@ function costText(cost) {
   return entries.map(([material, amount]) => fmtNum(amount) + ' ' + material).join(', ');
 }
 
+/**
+ * Текст возврата по котировке отмены.
+ *
+ * Цифры — серверовы (`job.cancel`), а не доля, прикинутая здесь по таймеру: витрина,
+ * посчитавшая своё, а касса — своё, это ровно тот баг, из-за которого игрок пишет
+ * «мне вернули меньше, чем обещали». Поэтому строка собирается из ответа сервера
+ * дословно.
+ */
+function refundText(quote) {
+  if (!quote || !quote.canCancel) return 'не отменить';
+  const parts = Object.entries(quote.materials || {}).map(([id, amount]) => fmtNum(amount) + ' ' + id);
+  if (quote.sec > 0) parts.push(fmtNum(quote.sec) + ' SEC');
+  const rate = Math.round((quote.refundRate || 0) * 100);
+  const grace = quote.graceLeftMs > 0 ? ' · льгота ещё ' + fmtMs(quote.graceLeftMs) : '';
+  return 'вернёт ' + (parts.length ? parts.join(', ') : 'ничего') + ' (' + rate + '%)' + grace;
+}
+
 function renderShop() {
   const tag = $('shopTag');
   const body = $('shopBody');
@@ -2390,21 +2589,45 @@ function renderShop() {
     : '<option>загрузка…</option>';
 
   const queue = eco.builds.length
-    ? '<table>' + eco.builds.map((job) => '<tr><td>' + esc(job.name) + ' <span class="muted">L' + job.level + '</span></td>' +
-      '<td class="num">' + (job.done ? '<span class="ok">готово, инвентарь забит</span>' : fmtMs(job.remainingMs)) + '</td>' +
-      '<td class="num"><button onclick="TD.speedup(\'' + job.id + '\')">добить</button></td></tr>').join('') + '</table>'
+    ? '<table>' + eco.builds.map((job) => {
+        const quote = job.cancel;
+        // Причина отказа формулируется сервером в `quote.reason`, а не догадкой фронта:
+        // «уже завершена» и «не найдена в очереди» — разные сообщения игроку про одни
+        // и те же 409/404.
+        const refusal = quote && quote.reason === 'done'
+          ? 'работа завершена — результат заберёт следующий догон очереди'
+          : 'стройки нет в очереди';
+        const cancel = quote && quote.canCancel
+          ? '<button class="err" onclick="TD.cancelBuild(\'' + job.id + '\')" title="' + esc(refundText(quote)) + '">отменить</button>'
+          : '<button disabled title="' + esc(refusal) + '">отменить</button>';
+        return '<tr><td>' + esc(job.name) + ' <span class="muted">L' + job.level + ' · ' +
+          Math.round(((quote && quote.progress) || 0) * 100) + '%</span>' +
+          (quote && quote.canCancel
+            ? '<div class="muted" style="font-size:10px">' + esc(refundText(quote)) + '</div>'
+            : '') + '</td>' +
+          '<td class="num">' + (job.done ? '<span class="ok">готово, инвентарь забит</span>' : fmtMs(job.remainingMs)) + '</td>' +
+          '<td class="num"><button onclick="TD.speedup(\'' + job.id + '\')">добить</button></td>' +
+          '<td class="num">' + cancel + '</td></tr>';
+      }).join('') + '</table>'
     : '<div class="muted">очередь пуста</div>';
 
   const all = eco.speedup.all || {};
+  // Правила отмены приходят из каталога мастерской, а не дописаны сюда числом:
+  // подсказка, разошедшаяся с кассой, стоит дороже отсутствующей подсказки.
+  const rules = (S.blueprints && S.blueprints.cancel) || null;
+  const cancelHint = rules
+    ? 'Отмена до ' + Math.round(rules.graceRatio * 100) + '% таймера возвращает всё, дальше — ' +
+      Math.round(rules.refundRate * 100) + '%. '
+    : '';
   body.innerHTML =
     '<div class="row"><select id="bpSelect" style="flex:1">' + options + '</select>' +
     '<button onclick="TD.build()">Строить</button></div>' +
-    '<div class="muted" id="bpCost" style="margin-bottom:8px"></div>' +
+    '<div class="muted" id="bpCost" style="margin-bottom:6px"></div>' +
     queue +
-    '<div class="row" style="margin-top:8px"><button onclick="TD.speedupAll()">Ускорить всё' +
+    '<div class="row" style="margin-top:6px"><button onclick="TD.speedupAll()">Ускорить всё' +
     (all.cost != null ? ' (' + all.cost + ' хрониум)' : '') + '</button>' +
     '<span class="pill">' + eco.materials.chronium + ' хрониум</span></div>' +
-    '<p class="hint">Слоты строителя: ' + builders.free + ' свободен(о), следующий слот ' +
+    '<p class="hint">' + cancelHint + 'Слоты строителя: ' + builders.free + ' свободен(о), следующий слот ' +
     (builders.nextPrice == null ? 'не продаётся' : builders.nextPrice + ' астерия') + '.</p>';
 
   const showCost = () => {
@@ -2830,6 +3053,7 @@ function startReplay(result, battle) {
 
   resetReplayState();
   bindReplayControls();
+  setReplayPanel(true, battle.outcome + ' · ' + fmtMs(battle.durationMs));
   draw();
   renderReplayInfo();
   log('реплей готов: ' + timeline.length + ' кадров · ' + battle.ticks + ' тиков × ' + S.cfg.pvp.sim.tickMs + ' мс' +
@@ -3412,8 +3636,23 @@ function exitReplay() {
   $('rpPlay').innerHTML = '&#9654; Играть';
   $('rpClock').textContent = '—';
   $('rpEvents').textContent = 'Реплей закрыт — поле снова в режиме редактора.';
+  setReplayPanel(false, 'нет боя');
   draw();
   renderAnalysis();
+}
+
+/**
+ * Раскрыть или свернуть блок реплея.
+ *
+ * Блок без боя стоял раскрытым и отбирал у поля ~130 px высоты, до которой карта всегда
+ * дотягивала бы охотнее. Игра раскрывает его сама, когда приходит `battle.timeline`,
+ * и закрывает, когда смотреть нечего; игрок вправе переключить вручную — `toggle`
+ * пересоберёт поле под новую высоту (см. bindResize).
+ */
+function setReplayPanel(open, tag) {
+  const box = $('replay');
+  if (tag != null) $('rpTag').textContent = tag;
+  if (box.open !== open) box.open = open;      // `toggle`-слушатель зовёт relayoutBoard()
 }
 
 function renderReplayInfo() {
@@ -3462,7 +3701,10 @@ function selectTool(name) {
   for (const button of document.querySelectorAll('#toolbar button[data-tool]')) {
     button.classList.toggle('on', button.dataset.tool === name);
   }
-  $('pickHint').textContent = TOOL_HINT[name];
+  // Подсказка живёт в панели «Планировка», а не в тулбаре, и панель может быть ещё
+  // не отрисована (до первого снимка экономики) — отсюда проверка на null.
+  const hint = $('pickHint');
+  if (hint) hint.textContent = TOOL_HINT[name] || '';
 }
 
 /**
@@ -3522,6 +3764,19 @@ async function act(label, fn) {
   }
 }
 
+/**
+ * Сколько осталось работе из ответа сервера, мс.
+ *
+ * `job.endsAt` приходит СТРОКОЙ: доменный `Date` сериализуется в ISO при JSON-кодировании
+ * маршрута. Вычитание строки из числа даёт NaN, а не миллисекунды, и игрок читал в
+ * журнале «начато: Грузовой дрон · NaNс» — то есть сроки старта никто не видел никогда.
+ * Помощник один на оба места вызова («Строить» и «строить сооружение»), потому что
+ * вторая копия обязательно разошлась бы с первой ровно так же, как разошлась исходная.
+ */
+function leftMs(job) {
+  return job && job.endsAt ? new Date(job.endsAt).getTime() - Date.now() : 0;
+}
+
 const TD = {
   save: saveLayout,
   revert: revertLayout,
@@ -3544,7 +3799,7 @@ const TD = {
     const code = $('bpSelect') && $('bpSelect').value;
     return act('стройка', async function () {
       const result = await api('POST', '/v1/workshop/build', { code });
-      log('начато: ' + result.result.blueprint.name + ' · ' + fmtMs(result.result.job.endsAt - Date.now()), 'ok');
+      log('начато: ' + result.result.blueprint.name + ' · ' + fmtMs(leftMs(result.result.job)), 'ok');
     });
   },
 
@@ -3552,6 +3807,27 @@ const TD = {
     return act('ускорение', async function () {
       const result = await api('POST', '/v1/workshop/build/' + encodeURIComponent(jobId) + '/speedup', {});
       log('ускорено на ' + fmtMs(result.result.savedMs) + ' · ' + result.result.cost + ' хрониум', 'ok');
+    });
+  },
+
+  /**
+   * Отменить стройку.
+   *
+   * Ответом сервера приходит фактический возврат (`refund`), а не тот, что витрина
+   * показала в котировке до запроса: между отрисовкой ряда и кликом успевает пройти
+   * секунда, в которой льготное окно закрывается. Игроку говорится правда кассы.
+   */
+  cancelBuild(jobId) {
+    return act('отмена стройки', async function () {
+      const result = await api('POST', '/v1/workshop/build/' + encodeURIComponent(jobId) + '/cancel', {});
+      const res = result.result || {};
+      const refund = res.refund || {};
+      const parts = Object.entries(refund.materials || {}).map(([id, amount]) => fmtNum(amount) + ' ' + id);
+      if (refund.sec > 0) parts.push(fmtNum(refund.sec) + ' SEC');
+      log('отменено: ' + ((res.job && res.job.code) || jobId) + ' · вернулось ' +
+        (parts.length ? parts.join(', ') : 'ничего') +
+        (res.grace ? ' (льготное окно)' : ' · удержано ' + Math.round((1 - (res.rate || 0)) * 100) + '%') +
+        ' · роботов свободно ' + res.free, 'warn');
     });
   },
 
@@ -3593,8 +3869,7 @@ const TD = {
   buildStructure(code) {
     return act('стройка ' + code, async function () {
       const result = await api('POST', '/v1/workshop/build', { code });
-      const job = result.result.job;
-      const left = job && job.endsAt ? new Date(job.endsAt).getTime() - Date.now() : 0;
+      const left = leftMs(result.result.job);
       log('в очередь: ' + code + (result.result.structure ? ' (сооружение)' : '') +
         ' · ' + fmtMs(left) + ' · роботов занято ' + result.result.busy, 'ok');
     });
@@ -3704,6 +3979,57 @@ const TD = {
 
 window.TD = TD;
 
+// ─── Плотность интерфейса ─────────────────────────────────────────────────────
+/*
+ * Панели сворачиваются, и их состояние переживает перезагрузку.
+ *
+ * Без этого уплотнение не решает задачу: игрок заново сворачивает клан с рынком каждый
+ * раз, чтобы увидеть очередь стройки. Ключ один на всё хранилище полигона — те же
+ * `td.play.*`, что и токен с настройками вида.
+ */
+const PANEL_KEY = 'td.play.panels';
+
+function bindPanels() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(PANEL_KEY) || '{}') || {};
+  } catch {
+    saved = {};
+  }
+  const boxes = document.querySelectorAll('aside details.panel');
+  for (const box of boxes) {
+    if (Object.prototype.hasOwnProperty.call(saved, box.id)) box.open = Boolean(saved[box.id]);
+    // Событие `toggle` браузер даёт само — самописный обработчик клика здесь не нужен,
+    // и именно поэтому он переживает любую перерисовку содержимого панели.
+    box.addEventListener('toggle', () => {
+      const state = {};
+      for (const item of boxes) state[item.id] = item.open;
+      try {
+        localStorage.setItem(PANEL_KEY, JSON.stringify(state));
+      } catch {
+        // Приватный режим без хранилища: панель просто не запомнится, игра работает.
+      }
+    });
+  }
+}
+
+/**
+ * Поле пересчитывается на изменение окна и на любую смену высоты его окрестностей.
+ *
+ * Дебаунс 150 мс: тянуть рамку можно тысячами кадров, а `setupCanvas` сбрасывает кэш
+ * террейна и перерисовывает всю статику — на каждом промежуточном пикселе это дорогой
+ * и никому не нужный труд. `toggle` у реплея под дебаунсом не прячется намеренно:
+ * это одно событие на одно действие, и высота после него меняется целиком.
+ */
+function bindResize() {
+  let timer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(timer);
+    timer = setTimeout(relayoutBoard, 150);
+  });
+  $('replay').addEventListener('toggle', relayoutBoard);
+}
+
 // ─── Сборка страницы ─────────────────────────────────────────────────────────
 
 function renderAll() {
@@ -3761,6 +4087,8 @@ function frame(now) {
 async function boot() {
   bindBoard();
   bindViewToggles();
+  bindPanels();
+  bindResize();
   $('btnLogin').addEventListener('click', login);
   $('btnRefresh').addEventListener('click', refresh);
 

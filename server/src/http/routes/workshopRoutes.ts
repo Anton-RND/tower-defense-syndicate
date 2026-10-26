@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 
 import {
   BLUEPRINTS,
+  BUILD_CANCEL_GRACE_RATIO,
+  BUILD_CANCEL_REFUND_RATE,
   isJunkId,
   JUNK_IDS,
   MAX_BUILD_QUEUE,
@@ -12,6 +14,7 @@ import { MAX_STRUCTURE_TOTAL, STRUCTURES } from '../../config/structures.js';
 import { rngFromKey } from '../../lib/rng.js';
 import {
   applyChroniumSpeedup,
+  cancelBuild,
   speedupAllBuilds,
   speedupCraft,
   startBuild,
@@ -48,6 +51,12 @@ export function registerWorkshopRoutes(app: FastifyInstance, ctx: AppContext): v
      */
     structures: STRUCTURES,
     structureQueueLimit: MAX_STRUCTURE_TOTAL,
+    /**
+     * Правила отмены стройки. Отдаются здесь, а не выводятся фронтом из его же
+     * догадок: подсказка «до N% таймера возврат полный, дальше — M%» обязана
+     * совпадать с кассой, иначе игрок проверяет её на первом же отменённом реакторе.
+     */
+    cancel: { graceRatio: BUILD_CANCEL_GRACE_RATIO, refundRate: BUILD_CANCEL_REFUND_RATE },
     junk: JUNK_IDS.map((id) => ({ id, recipe: RECYCLE_RECIPES[id] }))
   }));
 
@@ -120,6 +129,37 @@ export function registerWorkshopRoutes(app: FastifyInstance, ctx: AppContext): v
       return { account: result.account, drafts: result.drafts, meta: result };
     });
     return shape(meta, meta);
+  });
+
+  app.post<{ Params: { jobId: string } }>('/v1/workshop/build/:jobId/cancel', auth, async (request) => {
+    const now = ctx.now();
+    const { jobId } = request.params;
+    const { account, meta } = await accountAction(ctx, claimsOf(request).sub, now, (synced) => {
+      const result = cancelBuild(synced, jobId, now, ctx.idFactory);
+      return { account: result.account, drafts: result.drafts, meta: result };
+    });
+    ctx.logger.info('build_cancelled', {
+      userId: account.id,
+      jobId,
+      code: meta.job.code,
+      // Доля возврата в логе обязательна по той же причине, что и `secSpent` у старта:
+      // «мне вернули меньше, чем я платил» разбирается по логу, а не по допросу игрока.
+      rate: meta.rate,
+      grace: meta.grace,
+      refund: meta.refund,
+      busy: meta.busyAfter
+    });
+    return {
+      ...viewOf(ctx.config, account, now),
+      result: {
+        job: meta.job,
+        refund: meta.refund,
+        rate: meta.rate,
+        grace: meta.grace,
+        busy: meta.busyAfter,
+        free: meta.freeAfter
+      }
+    };
   });
 
   app.post('/v1/workshop/build/speedup-all', auth, async (request) => {

@@ -91,6 +91,8 @@ interface BuildJobDoc {
   level: number;
   startedAt: Date;
   endsAt: Date;
+  /** Сколько SEC списано на старте (факт кассы, а не ценник — см. BuildJob в user.types). */
+  secSpent?: number;
 }
 
 interface LootDoc {
@@ -364,10 +366,16 @@ const buildJobSchema = new Schema<BuildJobDoc>(
   {
     jid: { type: String, required: true },
     code: { type: String, required: true },
-    kind: { type: String, enum: ['tower', 'drone', 'weapon'], required: true },
+    // 'structure' обязан быть в списке: сооружение стоит в той же очереди, что и
+    // предмет (startBuild пишет ему kind из контракта), и без этого значения любой
+    // документ игрока со стройкой реактора падал бы на записи валидацией схемы.
+    kind: { type: String, enum: ['tower', 'drone', 'weapon', 'structure'], required: true },
     level: { type: Number, required: true, default: 1, min: 1 },
     startedAt: { type: Date, required: true },
-    endsAt: { type: Date, required: true }
+    endsAt: { type: Date, required: true },
+    // Намеренно без default: отсутствие поля различимо с нулём и означает «документ
+    // старше отмены», что выводит цену по лестнице (buildCharge в workshop/craft.ts).
+    secSpent: { type: Number }
   },
   { _id: false }
 );
@@ -665,7 +673,10 @@ function jobFromDoc(doc: BuildJobDoc): BuildJob {
     kind: doc.kind as BuildJob['kind'],
     level: doc.level,
     startedAt: new Date(doc.startedAt),
-    endsAt: new Date(doc.endsAt)
+    endsAt: new Date(doc.endsAt),
+    // undefined (а не 0) для документов старше поля: 0 — это «денег не брали», и
+    // подмена одного другим молча обнулила бы возврат монеты при отмене стройки.
+    secSpent: typeof doc.secSpent === 'number' ? doc.secSpent : undefined
   };
 }
 
@@ -676,7 +687,8 @@ function jobToDoc(job: BuildJob): BuildJobDoc {
     kind: job.kind,
     level: job.level,
     startedAt: job.startedAt,
-    endsAt: job.endsAt
+    endsAt: job.endsAt,
+    secSpent: job.secSpent
   };
 }
 

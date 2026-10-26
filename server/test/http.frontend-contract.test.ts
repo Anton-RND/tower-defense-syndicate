@@ -124,6 +124,18 @@ const serverRoutes = collectServerRoutes();
 const clientPaths = collectClientPaths(readTsFiles(FRONTEND_DIR));
 
 /**
+ * Исходник витрины без комментариев.
+ *
+ * Один источник для двух родов проверок: адреса, куда страница стучится, и правила,
+ * по которым она считает. Комментарии вырезаются, иначе разговор о пути в объяснении
+ * считался бы путём (см. stripComments), а упоминание старого бага в комментарии —
+ * живым симптомом.
+ */
+function playSource(): string {
+  return stripComments(readFileSync(join(here, '../src/http/play.html'), 'utf8'));
+}
+
+/**
  * Пути, которые отправляет витрина полигона (`server/src/http/play.html`).
  *
  * HTML-страница — такой же клиент контракта, как `frontend/src`, и её адреса
@@ -134,7 +146,7 @@ const clientPaths = collectClientPaths(readTsFiles(FRONTEND_DIR));
  * требуют, чтобы за ним стоял хотя бы один зарегистрированный маршрут.
  */
 function collectPlayPaths(): string[] {
-  const source = stripComments(readFileSync(join(here, '../src/http/play.html'), 'utf8'));
+  const source = playSource();
   const paths = new Set<string>();
   for (const match of source.matchAll(/\bapi\(\s*'(GET|POST|PUT|PATCH|DELETE)'\s*,\s*'([^']*)'/g)) {
     const value = (match[2] ?? '').split('?')[0] ?? '';
@@ -223,6 +235,33 @@ describe('http/frontend-contract: витрина полигона (/play) ход
 
   it('режим входа витрина узнаёт у сервера, а не угадывает', () => {
     expect(playPaths).toContain('/v1/config');
+  });
+
+  it('отмена стройки ходит в живой маршрут, а не в выдуманный', () => {
+    // Витрина склеивает хвост (`'/v1/workshop/build/' + jobId + '/cancel'`), а префикс
+    // сам по себе существования маршрута не доказывает: без этой строки 404 на отмене
+    // поймал бы только игрок, нажав кнопку.
+    expect(serverRoutes.some((route) => route.raw === '/v1/workshop/build/:jobId/cancel')).toBe(true);
+    expect(playPaths.some((path) => path.startsWith('/v1/workshop/build/'))).toBe(true);
+  });
+
+  it('срок из ответа сервера витрина вычитает из миллисекунд, а не из строки', () => {
+    // Баг, заметный только игроку: `BuildJob.endsAt` — доменный `Date`, а через JSON
+    // маршрута он приезжает строкой `"2026-10-26T09:36:41.342Z"`. Выражение
+    // `job.endsAt - Date.now()` поэтому равно NaN, и журнал показывал
+    // «начато: Грузовой дрон · NaNс» — то есть срок старта не видел никто.
+    //
+    // Типы здесь бессильны: страница не собирается и не типизирована (принцип 3 в её
+    // шапке), а `fmtMs(NaN)` печатает «0с» вместо падения, так что молчаливый зелёный
+    // гарантирован и на живом прогоне. Единственная защита — статическое правило
+    // по исходнику, того же рода, что и проверка адресов выше.
+    const offenders: string[] = [];
+    for (const match of playSource().matchAll(/([A-Za-z0-9_.$[\]'"()]*)\s*-\s*Date\.now\(\)/g)) {
+      const left = (match[1] ?? '').trim();
+      // Разрешено ровно одно: левый операнд уже приведён к числу через getTime().
+      if (!left.endsWith('.getTime()')) offenders.push(left || '<пусто>');
+    }
+    expect(offenders, `сырая дата участвует в вычитании: ${offenders.join(', ')}`).toEqual([]);
   });
 });
 
