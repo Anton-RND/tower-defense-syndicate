@@ -13,6 +13,7 @@
     "typecheck:frontend": "tsc -p frontend/tsconfig.json --noEmit",
     "test": "npm run test --workspace server",
     "vk:doctor": "npm run vk:doctor --workspace server --",
+    "audit:energy": "npm run audit:energy --workspace server --",
     "copy:check": "node _copy_check.mjs",
     "copy:negtest": "node _neg_test.mjs"
   },

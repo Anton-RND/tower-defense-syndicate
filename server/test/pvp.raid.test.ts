@@ -161,6 +161,13 @@ describe('pvp/raid: расчёт боя', () => {
 
     const reasons = new Set(result.drafts.map((draft) => draft.reason));
     expect(reasons.has('battle_loot')).toBe(true);
+    // Энергия — тоже движение. Пока она списывалась правкой документа, вопрос «откуда
+    // у игрока 100 энергии» не имел ответа, а переплата была необратима: сейчас у
+    // каждого рейда есть якорь `balanceAfter` (см. 'raid_energy' в ledger.types.ts).
+    expect(reasons.has('raid_energy')).toBe(true);
+    const energyDraft = result.drafts.find((draft) => draft.currency === 'energy');
+    expect(energyDraft?.delta).toBe(-ATTACK_ENERGY_COST);
+    expect(energyDraft?.balanceAfter).toBe(result.attacker.resources.energy);
     // Трофеи (п.4.1) — только несобранные склады защитника: lootShare × множитель исхода.
     const share = config.economy.lootShare * OUTCOME_STEAL_FACTOR[result.battle.outcome];
     expect(result.stolen.ferrum).toBe(Math.floor(1000 * share));

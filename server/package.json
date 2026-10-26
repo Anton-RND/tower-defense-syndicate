@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "vk:doctor": "tsx scripts/vk-doctor.ts",
+    "audit:energy": "tsx scripts/audit-energy.ts",
     "bench": "tsx scripts/bench-hotpath.ts"
   },
   "dependencies": {

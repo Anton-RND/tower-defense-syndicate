@@ -167,7 +167,11 @@ export function resolveRaid(attacker: UserAccount, input: RaidInput): RaidResult
     });
   }
 
-  const energy = spendEnergy(attacker, ATTACK_ENERGY_COST, now, config);
+  const energy = spendEnergy(attacker, ATTACK_ENERGY_COST, now, config, {
+    reason: 'raid_energy',
+    refType: 'raid',
+    refId: raidId
+  });
   // Станиумное поле защитника (config/materials.ts) — единственное, что из «материалов»
   // касается боя. Срок проверяем по `now` рейда, а не по внутренним часам симуляции,
   // иначе одно состояние давало бы разный исход в зависимости от длины боя; множитель
@@ -278,7 +282,10 @@ export function resolveRaid(attacker: UserAccount, input: RaidInput): RaidResult
   return {
     attacker: { ...gained.account, storages: attackerStorages, pvp: attackerPvp },
     defender: { ...ticked, storages, pvp: defenderPvp },
-    drafts: [...lootResult.drafts, ...gained.drafts],
+    // Энергия — ПЕРВОЙ в пачке: это допуск к бою, а не его итог, и якорь журнала по
+    // ней должен существовать, даже если следующий шаг редуктора откажет (тогда
+    // черновик всё равно не уедет наверх — редуктор не отработал).
+    drafts: [...energy.drafts, ...lootResult.drafts, ...gained.drafts],
     battle,
     army,
     rating: {

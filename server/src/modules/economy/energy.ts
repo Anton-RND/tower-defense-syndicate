@@ -1,9 +1,9 @@
 import type { EconomyConfig } from '../../config/env.js';
 import { AppError, ErrorCodes } from '../../lib/errors.js';
 import type { UserAccount } from '../user/user.types.js';
-import { effectiveEnergyRegenPerHour } from './entitlements.js';
-import { makeIdempotencyKey, type LedgerDraft } from '../ledger/ledger.types.js';
-import { credit, resource } from './wallet.js';
+import { effectiveEnergyRegenPerHour, MAX_STACK_MULTIPLIER } from './entitlements.js';
+import { makeIdempotencyKey, type LedgerDraft, type LedgerReason } from '../ledger/ledger.types.js';
+import { credit, debit, resource } from './wallet.js';
 import { HOUR_MS } from './mining.js';
 
 /**
@@ -78,6 +78,8 @@ export function applyEnergyTick(account: UserAccount, now: Date, config: Economy
 
 export interface SpendResult {
   account: UserAccount;
+  /** Движение энергии в журнал — тот самый якорь, без которого переплата необнаружима. */
+  drafts: LedgerDraft[];
   /** Целые единицы до траты (после тика регена). */
   before: number;
   after: number;
@@ -85,15 +87,36 @@ export interface SpendResult {
 }
 
 /**
+ * Контекст траты энергии.
+ *
+ * Параметр ОБЯЗАТЕЛЕН, и не для строгости стиля: пока у вызывающего слоя нет причины и
+ * id действия, движение уходит в журнал пустым, и энергия остаётся единственной
+ * валютой кошелька без якорей (см. причину 'raid_energy' в ledger.types.ts).
+ * Компилятор должен мешать этому, а не комментарий.
+ */
+export interface EnergySpendContext {
+  reason: LedgerReason;
+  /** Тип и id внешнего объекта: попадают в журнал и в ключ идемпотентности. */
+  refType: 'raid';
+  refId: string;
+}
+
+/**
  * Трата энергии на действие (PvP-атака, ускорение крафта — п.2.3, п.3.1).
  * Сначала реген, потом списание; не хватает — AppError(409), и стор (благодаря
  * транзакционной семантике) не пишет ничего.
+ *
+ * Списывает через `debit`, а не правкой `resources.energy`: только `debit` проставляет
+ * `balanceAfter` — точку отсчёта, по которой `energyCeiling` потом отличает честно
+ * накопленное от напечатанного багом. Дробный остаток сохраняется как раньше
+ * (`before` — цементированная витрина, `account` — точное значение).
  */
 export function spendEnergy(
   account: UserAccount,
   cost: number,
   now: Date,
-  config: EconomyConfig
+  config: EconomyConfig,
+  ctx: EnergySpendContext
 ): SpendResult {
   if (!Number.isInteger(cost) || cost <= 0) {
     throw new AppError(ErrorCodes.VALIDATION_ERROR, 400, 'Стоимость действия должна быть целым числом > 0', {
@@ -115,11 +138,137 @@ export function spendEnergy(
     });
   }
 
+  const movement = debit(ticked, resource('energy'), cost, {
+    ts: now,
+    reason: ctx.reason,
+    refType: ctx.refType,
+    refId: ctx.refId,
+    // Ключ включает валюту: одно действие списывает несколько ценностей (лут, трофеи),
+    // и без суффикса `energy` эта запись была бы отброшена уникальным индексом журнала
+    // как дубль первой — вариант 1 шапки ledger.types.ts.
+    idempotencyKey: makeIdempotencyKey(ctx.refType, `${ctx.refId}:energy`)
+  });
+
   return {
-    account: { ...ticked, resources: { ...ticked.resources, energy: ticked.resources.energy - cost } },
+    account: movement.account,
+    drafts: [movement.draft],
     before,
     after: before - cost,
     cost
+  };
+}
+
+/**
+ * Якорь энергии: точный баланс в точный момент.
+ *
+ * Берётся ИСКЛЮЧИТЕЛЬНО из журнала (`balanceAfter` + `ts` последней записи по валюте).
+ * Других источников точного баланса в системе нет: `resources.energy` в документе —
+ * это то самое число, которое проверяется.
+ */
+export interface EnergyAnchor {
+  ts: Date;
+  balance: number;
+}
+
+/**
+ * Верхняя граница того, сколько энергии у игрока МОГЛО быть честно в момент `now`,
+ * если в момент `anchor.ts` у него было честно `anchor.balance`.
+ *
+ * Между двумя якорями энергию меняют только две силы: реген (чистая функция времени и
+ * ставки) и траты (каждая — запись в журнал, то есть новый якорь). Поэтому граница
+ * строится без истории игрока и без догадок о его клиенте.
+ *
+ * Ставка берётся ПОТОЛКОМ (`MAX_STACK_MULTIPLIER`), а не текущей: протухшие
+ * привилегии вычищаются тиком и их история в документе не живёт, а граница обязана
+ * быть верхней — иначе проверка обвинит честного игрока, купившего
+ * «Энерго-катализатор» на прошлой неделе. Цена завышения — не обнаружить часть
+ * переплат; цена занижения — снять энергию с правого.
+ */
+export function energyCeiling(anchor: EnergyAnchor, now: Date, config: EconomyConfig): number {
+  const hours = Math.max(0, now.getTime() - anchor.ts.getTime()) / HOUR_MS;
+  const maxPerHour = config.energyRegenPerHour * MAX_STACK_MULTIPLIER;
+  return round6(Math.min(config.energyCap, Math.max(0, anchor.balance) + maxPerHour * hours));
+}
+
+/**
+ * Одно движение по энергии из журнала — ровно то, что нужно для прогона границы.
+ *
+ * Берётся из записей с `currency = 'energy'` (любая причина: 'raid_energy', 'assist',
+ * 'starter', 'admin'). `balanceAfter` — число, зафиксированное в момент движения;
+ * доверять ему надо, но проверять: именно расхождение `balanceAfter` с границей и есть
+ * сигнал переплаты.
+ */
+export interface EnergyMovement {
+  ts: Date;
+  /** Знак как в журнале: + начисление, − списание. */
+  delta: number;
+  balanceAfter: number;
+}
+
+export interface EnergyAudit {
+  /** Потолок честного баланса в момент `now` — столько игрок мог иметь, не нарушая правил. */
+  honest: number;
+  /** `resources.energy − honest`, не меньше нуля. То, что подлежит возврату. */
+  excess: number;
+  /** Момент первого расхождения журнала с границей; null — расхождений нет. */
+  firstDivergence: Date | null;
+}
+
+/** Допуск на шум округления: все балансы энергии считаются через round6. */
+const ENERGY_EPSILON = 1e-6;
+
+/**
+ * Прогон журнала энергии от рождения аккаунта: сколько игрок мог иметь честно и есть
+ * ли излишек.
+ *
+ * Почему НЕ достаточно одной последней записи. Граница по одному якорю
+ * (`energyCeiling` от последнего движения) наивна: эксплойт с курсором портил именно
+ * тот баланс, из которого якорь и делается, — проверять испорченное число по самому
+ * себе значит никогда ничего не найти. Здесь же журнал проходится ПОСЛЕДОВАТЕЛЬНО, и
+ * каждое движение сверяется с границей, построенной от ПРЕДЫДУЩЕГО, ещё не испорченного
+ * значения. Расхождение фиксируется один раз, и спорный баланс в дальнейший расчёт
+ * не пускается: курсор остаётся на последней достоверной записи.
+ *
+ * Начало отсчёта — `createAccount`: новичок получает полный бак (`energyCap`) в момент
+ * `createdAt`, и это единственная легальная точка, не требующая записей в журнале.
+ *
+ * Все расхождения трактуются в пользу игрока: вниз по границе идём по `min` журнала и
+ * потолка, излишек накапливаем только там, где зафиксированный баланс ПРЕВЫСИЛ потолок.
+ * Цена такой стороны — не заметить часть краж, где игрок тратил украденное быстрее, чем
+ * его успели проверить; цена обратной стороны — снять энергию с честного игрока, у
+ * которого привилегии истекли между записями.
+ */
+export function auditEnergy(
+  account: UserAccount,
+  movements: readonly EnergyMovement[],
+  now: Date,
+  config: EconomyConfig
+): EnergyAudit {
+  const ordered = [...movements].sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  // Новичок стартует с полным баком (createAccount) — другой легальной точки отсчёта нет.
+  let honest = config.energyCap;
+  let cursor = account.createdAt;
+  let firstDivergence: Date | null = null;
+
+  for (const movement of ordered) {
+    const ceiling = energyCeiling({ ts: cursor, balance: honest }, movement.ts, config);
+    const expected = Math.max(0, Math.min(config.energyCap, ceiling + movement.delta));
+    if (movement.balanceAfter > expected + ENERGY_EPSILON) {
+      if (firstDivergence === null) firstDivergence = movement.ts;
+      honest = expected;
+      continue;
+    }
+    // Движение не превысило потолок — верим журналу (он может быть НИЖЕ границы: игрок
+    // терял энергию в окнах, когда списания ещё не писались, и это не его вина).
+    honest = Math.max(0, movement.balanceAfter);
+    cursor = movement.ts;
+  }
+
+  const ceilingNow = energyCeiling({ ts: cursor, balance: honest }, now, config);
+  return {
+    honest: round6(ceilingNow),
+    excess: round6(Math.max(0, account.resources.energy - ceilingNow)),
+    firstDivergence
   };
 }
 
