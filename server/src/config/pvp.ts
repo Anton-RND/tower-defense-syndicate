@@ -1,4 +1,4 @@
-import { ITEM_KINDS, getBlueprint, type Blueprint, type ItemKind } from './workshop.js';
+import { BLUEPRINTS, ITEM_KINDS, getBlueprint, type Blueprint, type ItemKind } from './workshop.js';
 
 /**
  * PvP-баланс (Шаг 4): рейтинг, матчмейкинг, состав армий и параметры симуляции боя.
@@ -335,6 +335,65 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * Боевая карточка чертежа для витрины: те же цифры, по которым считается бой.
+ *
+ * Отдаём готовый профиль, а не просим фронт собрать его из `defense`/`robots` и
+ * переопределений. Причина ровно та же, по которой существует `publicPvpConfig`:
+ * формула уровня (`1 + STEP × (level − 1)`) и право переопределения тира — это
+ * баланс, а не оформление. Клиент, дописавший формулу у себя, расходится с сервером
+ * на первом же шаге балансировки, и тогда карточка башни обещает одно, а рейд
+ * показывает другое.
+ */
+export interface PublicUnitProfile {
+  code: string;
+  name: string;
+  kind: ItemKind;
+  tier: Tier;
+  /** «Зачем» дословно из чертежа (`Blueprint.role`). */
+  role: string;
+  dps: number;
+  hp: number;
+  /** Радиус поражения в клетках. */
+  range: number;
+  /** Клеток в секунду. null — оборона: она не ходит. */
+  speed: number | null;
+  /** Сколько машин выставляет один предмет. null — один ствол на клетку. */
+  squad: number | null;
+}
+
+/**
+ * Профили всех чертежей каталога на L1 — «что я получу, если нажму «строить»».
+ *
+ * L1, а не уровень конкретного предмета: витрина мастерской показывает цену и срок
+ * до сборки, и сравнивать их нужно с тем, что приедет из очереди. Профиль уже
+ * собранного предмета игрок видит в инвентаре и в ответе рейда.
+ */
+export function publicUnitProfiles(): Record<string, PublicUnitProfile> {
+  const result: Record<string, PublicUnitProfile> = {};
+  for (const blueprint of BLUEPRINTS) {
+    // Штурмовик описывается профилем робота: у дрона есть скорость и рой, а
+    // оборонительный профиль для него выдуман (`defenseProfileOf` не смотрит в
+    // `ATTACK_KINDS`). Всё остальное — оборона.
+    const robot = robotProfileOf({ code: blueprint.code, level: 1 });
+    const profile = robot ?? defenseProfileOf({ code: blueprint.code, level: 1 });
+    if (!profile) continue;
+    result[blueprint.code] = {
+      code: blueprint.code,
+      name: blueprint.name,
+      kind: blueprint.kind,
+      tier: blueprint.tier,
+      role: blueprint.role ?? '',
+      dps: profile.dps,
+      hp: profile.hp,
+      range: profile.range,
+      speed: robot ? robot.speed : null,
+      squad: robot ? robot.squad : null
+    };
+  }
+  return result;
+}
+
 // ─── Трофеи ───────────────────────────────────────────────────────────────────
 
 /**
@@ -381,6 +440,10 @@ export function publicPvpConfig(): Record<string, unknown> {
     sim: { tickMs: SIM_TICK_MS, maxTicks: SIM_MAX_TICKS, wallHp: WALL_HP, hqHp: HQ_HP },
     defense: DEFENSE_BY_TIER,
     robots: ROBOTS_BY_TIER,
+    // Карточки по кодам тем же вызовом, что считает бой: витрина мастерской обязана
+    // пообещать ровно то, что приедет. `defense`/`robots` выше — лестница тиров, а
+    // вкус конкретного чертежа живёт в переопределениях, и угадать их фронтом нельзя.
+    units: publicUnitProfiles(),
     stealFactor: OUTCOME_STEAL_FACTOR,
     levels: { dpsStep: LEVEL_DPS_STEP, hpStep: LEVEL_HP_STEP }
   };

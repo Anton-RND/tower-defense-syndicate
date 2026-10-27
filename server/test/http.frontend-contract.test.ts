@@ -2,10 +2,14 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+
+import { buildApp } from '../src/http/app.js';
+import { createContext } from '../src/http/context.js';
+import { testConfig } from './fixtures.js';
 
 /**
- * Контракт «фронт → сервер» по ПУТЯМ запросов (P3).
+ * Контракт «фронт → сервер» по ПУТЯМ запросов и ПОЛЯМ ответов (P3).
  *
  * Зачем, если есть типы. `frontend/src/vk/VkPaymentManager.ts` обращался к
  * `/v1/payments/orders`, а сервер знает только `/v1/shop/orders`: маршрут не
@@ -22,6 +26,11 @@ import { describe, expect, it } from 'vitest';
  * убедиться, что каждый путь, который фронт способен отправить, зарегистрирован на
  * сервере. Это не проверка поведения, а проверка адреса, и именно она здесь дорогая:
  * ошибка в адресе стоит игроку платежа, а не лишних 200 мс.
+ *
+ * Вторая ось того же контракта — поля (см. раздел в конце файла). Путь, который
+ * существует, ещё не означает, что ответ несёт нужное поле: переименуй `heatPerNitrogen`
+ * в сериализаторе, и все пять вызовов витрины вернут 200, а подсказка покажет
+ * «undefined кВт-тепла». Проверки путей это не видят вообще.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -283,3 +292,298 @@ describe('http/frontend-contract: боевой клиент (frontend/src) по�
     expect(serverRoutes.some((route) => route.raw === '/v1/auth/vk/init-data' && route.method === 'POST')).toBe(true);
   });
 });
+
+// ─── Поля ответов: что витрина читает по имени ───────────────────────────────
+
+/**
+ * Переменные витрины и маршруты, откуда они пришли.
+ *
+ * Соответствие «глобальная переменница страницы → endpoint» существует только здесь,
+ * хотя в самой витрине оно разбросано по разным местам: `S.snap` наполняется из
+ * ЛЮБОГО ответа, где есть `{user, economy}` (см. `adoptView`), `S.blueprints` и
+ * `S.cfg` — из своих вызовов, `S.clan` и `S.market` — из своих. Прочитать его
+ * больше негде, а без него проверка поля невозможна: `S.snap.economy.warehouses`
+ * — это про `/v1/economy`, и отвечать за него должен тот же маршрут.
+ *
+ * `S.draft` в списке нет намеренно: это локальная копия планировки, собранная
+ * `syncDraftFromView`, а не ответ сервера. Требовать от сервера её полей — значит
+ * требовать того, чего он никогда не отдавал.
+ */
+const PLAY_ROOTS: Record<string, string> = {
+  cfg: '/v1/config',
+  blueprints: '/v1/workshop/blueprints',
+  snap: '/v1/economy',
+  clan: '/v1/clan',
+  market: '/v1/market'
+};
+
+/**
+ * Чем цепочка вправе заканчиваться, не будучи полем ответа.
+ *
+ * Витрина пишет `S.cfg.pvp.attack.kinds.includes(item.kind)` и
+ * `S.snap.user.id.slice(0, 8)`: `includes` и `slice` — методы оболочки, а не данные
+ * сервера. Без этой поправки проверка требовала бы несуществующего поля в полностью
+ * живом ответе, то есть горела бы на ровном месте — а такой тест хуже отсутствия
+ * теста (см. шапку файла).
+ */
+const CONTAINER_TAILS = new Set([
+  'at', 'charAt', 'concat', 'entries', 'every', 'filter', 'find', 'findIndex', 'flat', 'flatMap',
+  'forEach', 'includes', 'indexOf', 'join', 'keys', 'lastIndexOf', 'length', 'map', 'pop', 'push',
+  'reduce', 'reverse', 'shift', 'slice', 'some', 'sort', 'splice', 'split', 'toFixed', 'toString',
+  'trim', 'unshift', 'valueOf', 'values'
+]);
+
+/** Одна цепочка `S.<корень>.<поле>...` в исходнике витрины, очищенная от методов оболочки. */
+interface FieldRead {
+  root: string;
+  /** Путь относительно корня: `economy.power.rows`. */
+  path: string;
+}
+
+/** Литеральное обращение к полю ответа: `S.snap.economy.base` (включая хвост-метод). */
+const FIELD_CHAIN_RE = /\bS\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+/g;
+
+/**
+ * Все поля, которые витрина называет по имени.
+ *
+ * Источник — только литеральные цепочки `S.<корень>.…`. Остальное витрина делает
+ * через локальные переменные (`const eco = S.snap.economy`, `const wh = list.find(…)`),
+ * где имя поля уже потеряно для любого разбора без анализа потока данных. Это
+ * сознательное ограничение, а не претензия на полноту: переименование в `rows` или
+ * `heatPerNitrogen` обязано ловиться именно по прямым обращениям — их пишут один раз,
+ * в одном месте, и не вспоминают о них, когда правят сериализатор в другом.
+ */
+function collectPlayFieldReads(): FieldRead[] {
+  const source = playSource();
+  const reads: FieldRead[] = [];
+  const seen = new Set<string>();
+  for (const match of source.matchAll(FIELD_CHAIN_RE)) {
+    const parts = match[0].slice(2).split('.');
+    const root = parts[0] ?? '';
+    const segments = parts.slice(1);
+    if (!(root in PLAY_ROOTS)) continue;
+    while (segments.length > 0 && CONTAINER_TAILS.has(segments[segments.length - 1] ?? '')) {
+      segments.pop();
+    }
+    if (segments.length === 0) continue;
+    const path = segments.join('.');
+    const id = `S.${root}.${path}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    reads.push({ root, path });
+  }
+  return reads;
+}
+
+/**
+ * Множество путей, реально присутствующих в сериализованном ответе.
+ *
+ * Обходим именно JSON, а не типы и не исходник маршрута: контракт — это то, что ушло
+ * по проводам. Доменный `Date` через JSON становится строкой, поле со значением
+ * `undefined` из объекта исчезает вовсе, а `viewOf` собирает витрину не там, где живёт
+ * интерфейс `EconomyView`. Ни типы, ни регулярка по маршруту этого не видят.
+ *
+ * Массив прозрачен: витрина пишет `economy.inventory`, а не `economy.inventory[0]`,
+ * поэтому элементы вносят свои пути под тем же префиксом.
+ */
+function collectResponsePaths(value: unknown, prefix: string, out: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectResponsePaths(item, prefix, out);
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    out.add(path);
+    collectResponsePaths(child, path, out);
+  }
+}
+
+/** Спуск по пути внутри разобранного ответа; массивы не траверсируются (пути к константам их не содержат). */
+function navigateResponse(value: unknown, path: string): unknown {
+  let current = value;
+  for (const segment of path.split('.')) {
+    if (current === null || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+/**
+ * Один стенд на весь раздел: ответы витрины не зависят от порядка тестов, а
+ * `buildApp` — не самая дешёвая операция в этом файле.
+ *
+ * Вход — `dev-login` на тестовом конфиге: именно им пользуется сама витрина, когда
+ * открывает страницу вне WebView (см. блок «Вход в игру» в `play.html`). Брать для
+ * снимка другой способ входа значило бы проверять поля, которые витрина в этом
+ * режиме не получает.
+ */
+let standPromise: Promise<Map<string, unknown>> | null = null;
+let standApp: { close(): Promise<void> } | null = null;
+
+async function openPlayStand(): Promise<Map<string, unknown>> {
+  const app = await buildApp(createContext(testConfig({ DEV_SIGNER_ENABLED: 'true' })));
+  standApp = app;
+  const login = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/dev-login',
+    payload: { socialId: 'contract-fields' }
+  });
+  expect(login.statusCode, login.body).toBe(200);
+  const token = String((login.json() as { token?: string }).token);
+  const views = new Map<string, unknown>();
+  for (const [root, path] of Object.entries(PLAY_ROOTS)) {
+    const response = await app.inject({
+      method: 'GET',
+      url: path,
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(response.statusCode, `${path} → ${response.statusCode}: ${response.body.slice(0, 160)}`).toBe(200);
+    views.set(root, response.json());
+  }
+  return views;
+}
+
+function playStand(): Promise<Map<string, unknown>> {
+  if (!standPromise) standPromise = openPlayStand();
+  return standPromise;
+}
+
+afterAll(async () => {
+  if (standApp) await standApp.close();
+  standApp = null;
+  standPromise = null;
+});
+
+const playReads = collectPlayFieldReads();
+
+/**
+ * Плоские объекты констант, а не словари игровых сущностей.
+ *
+ * `labels.materials`, `units`, `blueprints` и `structures` сюда не входят намеренно:
+ * их ключи — идентификаторы материалов и чертежей, и витрина достаёт их вычисленным
+ * ключом (`labels.materials[id]`, `units[code]`), а не по имени. Поимённое чтение
+ * для словаря означало бы переписать каждый материал прямо в HTML — и устаревать
+ * при каждом добавлении руды.
+ */
+const PLAY_CONSTANT_BLOCKS: readonly FieldRead[] = [{ root: 'blueprints', path: 'power' }];
+
+describe('http/frontend-contract: витрина читает только те поля, которые сервер отдаёт', () => {
+  it('полей названо достаточно, чтобы верить выводу', () => {
+    // Пустой выборкой зелёный тест гарантирован заранее: регулярка могла разойтись
+    // со стилем записи страницы. Проверяем объём по каждому корню, прежде чем
+    // верить общему списку («пустой вход — тихий зелёный тест», см. начало файла).
+    for (const root of Object.keys(PLAY_ROOTS)) {
+      expect(playReads.filter((read) => read.root === root).length, `корень S.${root}`).toBeGreaterThan(0);
+    }
+    expect(playReads.length, 'все чтения витрины').toBeGreaterThan(20);
+  });
+
+  it('каждое поле, названное витриной, есть в сериализованном ответе', async () => {
+    const views = await playStand();
+    const paths = new Map<string, Set<string>>();
+    for (const [root, view] of views) {
+      const set = new Set<string>();
+      collectResponsePaths(view, '', set);
+      paths.set(root, set);
+    }
+    const missing = playReads.filter((read) => !paths.get(read.root)?.has(read.path));
+    expect(
+      missing,
+      `витрина читает то, чего сервер не отдаёт: ${missing.map((read) => `S.${read.root}.${read.path}`).join(', ')}`
+    ).toEqual([]);
+  });
+
+  it('константы каталога не едут впустую: каждая читается витриной', async () => {
+    const views = await playStand();
+    const unread: string[] = [];
+    for (const block of PLAY_CONSTANT_BLOCKS) {
+      const value = navigateResponse(views.get(block.root), block.path);
+      expect(value, `S.${block.root}.${block.path} отсутствует в ответе`).toBeTypeOf('object');
+      const readNames = new Set(
+        playReads
+          .filter((read) => read.root === block.root && read.path.startsWith(`${block.path}.`))
+          .map((read) => read.path.slice(block.path.length + 1))
+      );
+      for (const key of Object.keys(value as Record<string, unknown>)) {
+        if (!readNames.has(key)) unread.push(`S.${block.root}.${block.path}.${key}`);
+      }
+    }
+    // Обратная сторона той же drift-проблемы. Поле, которое никто не читает, никто
+    // и не обновит: оно лежит в ответе, расходится с доменом и выглядит правдой
+    // для следующего, кто будет читать маршрут, а не витрину.
+    expect(unread, `сервер отдаёт, а витрина не читает: ${unread.join(', ')}`).toEqual([]);
+  });
+});
+// ─── Геометрия списков: столбик, а не решётка ────────────────────────────────
+
+/**
+ * Одно правило CSS из `<style>` витрины: селектор → тело объявления.
+ *
+ * Разбор намеренно плоский — без вложенных блоков и `@media`: все проверяемые
+ * селекторы простые, и появление у них вложенности само по себе было бы сменой
+ * подхода, которую стоит увидеть красным тестом, а не тихо проскочить. Пустая
+ * строка в ответе означает «правило не найдено», и каждый тест проверяет это
+ * отдельно: зелёный тест на пустой выборке вреден здесь ровно так же, как и в
+ * проверке путей («пустой вход — тихий зелёный тест», см. шапку файла).
+ */
+function cssRule(source: string, selector: string): string {
+  const css = source.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? '';
+  const flat = css.replace(/\s+/g, ' ');
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return flat.match(new RegExp('(?:^|[;{}])\\s*' + esc + '\\s*\\{([^}]*)\\}'))?.[1]?.trim() ?? '';
+}
+
+const playCss = playSource();
+
+describe('http/frontend-contract: списки витрины читаются столбиком, а не решёткой', () => {
+  it('ярлыки разделов идут одной колонкой сверху вниз', () => {
+    // Порядок ярлыков объявлен массивом TABS, и решётка с переносом его разрушала:
+    // десять ярлыков складывались в два-три этажа, и то, что игрок прочитал бы
+    // «сверху вниз по TABS», рассыпалось зигзагом. Возврат к `flex-wrap` — не вопрос
+    // вкуса, а потерянный порядок, объявленный на другом конце файла.
+    const tabs = cssRule(playCss, '#tabs');
+    expect(tabs, 'правило #tabs в <style>').not.toBe('');
+    expect(tabs).toContain('flex-direction: column');
+    expect(tabs).not.toContain('flex-wrap');
+    expect(tabs).not.toContain('grid-template');
+  });
+
+  it('иконки того, что строится, идут той же колонкой', () => {
+    // Сетка `repeat(auto-fill, minmax(58px, 1fr))` вытягивала каждый ряд по самому
+    // высокому соседу: длинное имя («Жидкий азот») ломалось на две строки и утаскивало
+    // за собой высоту всех соседей, а порядок, который собрали рендеры (FAMILY_ORDER в
+    // энергосети, порядок чертежей в цехе), читался по колонкам влево-вправо.
+    const grid = cssRule(playCss, '.icoGrid');
+    expect(grid, 'правило .icoGrid в <style>').not.toBe('');
+    expect(grid).toContain('flex-direction: column');
+    expect(grid).not.toContain('grid-template');
+  });
+
+  it('сам ярлык — строка «значок │ название │ бейдж» на всю ширину колонки', () => {
+    // Колонка контейнера без поворота содержимого дала бы вертикальную стопку внутри
+    // каждой кнопки — ровно то, что было до правки. Проверяется пара: направление
+    // ряда и растяжение на всю ширину, иначе строка повиснет узким обрывком слева.
+    for (const selector of ['.tab', '.ico']) {
+      const rule = cssRule(playCss, selector);
+      expect(rule, `правило ${selector} в <style>`).not.toBe('');
+      expect(rule).toContain('flex-direction: row');
+      expect(rule).toContain('width: 100%');
+    }
+  });
+
+  it('бейдж замыкает свою строку, а не висит над соседней', () => {
+    // `position: absolute; right: -4px` был рассчитан на плотную сетку, где у ярлыка
+    // есть свободный угол. В колонке этот угол — уже соседняя строка, и счётчик «0/2»
+    // повисал бы между разделами. `margin-left: auto` стоит ровно по правому краю
+    // своей строки и не влияет на соседей.
+    const rule = cssRule(playCss, '.tab .badge, .ico .cnt');
+    expect(rule, 'правило бейджа в <style>').not.toBe('');
+    expect(rule).not.toContain('position: absolute');
+    expect(rule).toContain('margin-left: auto');
+  });
+});
+
+
+
+

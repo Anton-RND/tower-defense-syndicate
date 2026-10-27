@@ -44,14 +44,16 @@
      `columns` упаковывает блоки вплотную по высоте столбца; `break-inside: avoid` —
      панель не рвётся на два столбца. Цена: при раскрытии панели перетекают между
      столбцами, что заметно дешевле вечных дыр. */
-  aside { columns: 320px; column-gap: 8px; }
-  aside > .panel { break-inside: avoid; -webkit-column-break-inside: avoid; }
+  /* Колонка была мультколоночной, пока панели жили аккордеоном: десять блоков
+     хотелось упаковать вплотную по высоте столбца. Вкладки-ярлыки оставили в колонке
+     ровно ОДНУ видимую панель, и многострочность из оптимизации превратилась в баг:
+     ярлыки и панель под ними разъезжались по разным колонкам. */
+  aside { display: block; min-width: 0; }
   @media (max-width: 900px) {
     /* minmax(0,1fr), а не 1fr: автоматический минимум трека равен min-content, и
        холст своими 500+ px растягивал бы трек за край окна (полоса горизонтального
        скролла на телефоне). Нулевой минимум позволяет полю ужаться до ширины экрана. */
     main { grid-template-columns: minmax(0, 1fr); }
-    aside { columns: 1; }
   }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; margin-bottom: 8px; }
   .panel > h2 {
@@ -59,20 +61,11 @@
     display: flex; align-items: center; gap: 6px;
   }
   .panel > h2 .tag { color: var(--accent); text-transform: none; letter-spacing: 0; }
-  /* Сворачиваемые панели: правая колонка держит десять блоков, и на экране высотой
-     900px они не помещаются ни при какой плотности. `details` вместо самописного
-     аккордеона: состояние открыт/закрыт даёт браузер, а не ещё один обработчик кликов. */
-  details.panel { padding: 0; }
-  details.panel > summary {
-    list-style: none; cursor: pointer; user-select: none; padding: 6px 8px; margin: 0;
-    font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
-    display: flex; align-items: center; gap: 6px;
-  }
-  details.panel > summary::-webkit-details-marker { display: none; }
-  details.panel > summary::before { content: '\25b8'; color: var(--accent); }
-  details.panel[open] > summary::before { content: '\25be'; }
-  details.panel > summary .tag { color: var(--accent); text-transform: none; letter-spacing: 0; }
-  details.panel > .panelBody {
+  /* Панели были сворачиваемыми `<details>`: правая колонка держит десять блоков, и на
+     экране высотой 900px они не помещались ни при какой плотности. Вкладки-ярлыки
+     заменили и раскрытие, и маркер ▸/▾ — состоянием «открыт» рулит активный ярлык.
+     Сам `<details>` остался только под полем (`#replay`): он вне этой колонки. */
+  .panel > .panelBody {
     padding: 0 8px 7px;
     /* Таблица энергосети (7 колонок) имеет min-content ~490px, и на узком окне она
        раздувала УЖЕ ВЕСЬ ДОКУМЕНТ: вьюпорт обязан расшириться до min-content страницы,
@@ -127,6 +120,111 @@
   }
   .pill { border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 10px; color: var(--muted); }
   .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
+
+  /* ─── Ярлыки разделов (правая колонка) ──────────────────────────────────────
+     Аккордеон из десяти панелей прятал очередь стройки под прокрутку. Ярлык держит
+     раздел на виду всегда: значок = что внутри, подпись = как называется, бейдж =
+     чем он сейчас занят. Открыт ровно один.
+     Столбик, а не ряд: десять ярлыков в ряд складывались в два-три этажа по 56 px,
+     и порядок обращения, которым его объявил TABS, в этой решётке не читался. В
+     столбике ярлык = строка «значок │ название │ бейдж», и список сверху вниз
+     перечисляет разделы ровно в том порядке, в котором они идут в TABS. */
+  #tabs { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+  .tab {
+    display: flex; flex-direction: row; align-items: center; gap: 7px; width: 100%;
+    padding: 4px 8px; cursor: pointer; user-select: none; text-align: left;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    color: var(--muted); font: inherit;
+  }
+  .tab:hover { background: var(--panel2); color: var(--text); }
+  .tab.on { background: #16202c; border-color: var(--accent); color: var(--text); }
+  /* Ширина колонки значка фиксирована: глифы в одном кегле разные по фигуре
+     («₽» уже, чем «⚔»), и без колонки подписи гуляли бы по горизонтали. */
+  .tab .glyph { flex: none; width: 15px; text-align: center; font-size: 14px; line-height: 1.1; }
+  .tab .cap {
+    flex: 1 1 auto; min-width: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Бейдж сидел на углу значка (`position: absolute`): в столбике угол ярлыка —
+     это уже соседний ярлык, и цифра «1/2» повисала бы между разделами. Теперь он
+     замыкает свою строку и тем самым стоит ровно по правому краю всех ярлыков. */
+  .tab .badge, .ico .cnt {
+    flex: none; margin-left: auto; max-width: 66px; overflow: hidden; white-space: nowrap;
+    background: #22303f; border: 1px solid #33465c; border-radius: 8px; padding: 0 4px;
+    font-size: 9px; line-height: 13px; color: var(--accent);
+  }
+  .tab .badge.ok, .ico .cnt.ok { background: #1e3527; border-color: #2f6b45; color: #9ae8bb; }
+  .tab .badge.warn, .ico .cnt.warn { background: #3a3020; border-color: #6b5a2f; color: var(--warn); }
+  .tab .badge.err, .ico .cnt.err { background: #3a2220; border-color: #6b2f2a; color: #f0a29b; }
+
+  /* ─── Иконки того, что строится ─────────────────────────────────────────────
+  Список `<select>` из десяти чертежей и таблица из семи колонок по сооружениям
+  объясняли ЦЕНУ, но не объясняли НАЗНАЧЕНИЕ: «Рельсотрон Mk.II · T2 · tower ·
+  45м» не говорит, зачем он и чем платит. Иконка + всплывающая карточка говорят.
+  Столбик, а не сетка `repeat(auto-fill, minmax(58px, 1fr))`: сетка вытягивала
+  каждый ряд по самому высокому соседу, длинное имя ломалось на две строки и
+  утаскивало за собой высоту всех соседей, а порядок, который собрали рендеры
+  (`FAMILY_ORDER` в энергосети, порядок чертежей в цехе), рассыпался по колонкам
+  влево-вправо. В столбике вещь = одна строка «значок │ название │ бейдж», и
+  список читается сверху вниз ровно в том порядке, в каком его выдал сервер. */
+  .icoGrid { display: flex; flex-direction: column; gap: 4px; margin: 5px 0 7px; }
+  .ico {
+    position: relative; display: flex; flex-direction: row; align-items: center; gap: 7px;
+    width: 100%; min-height: 0; padding: 4px 8px; cursor: pointer; font: inherit; text-align: left;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; color: var(--text);
+  }
+  .ico:hover { border-color: var(--accent); background: #1b2531; }
+  .ico.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  /* Не хватает материалов — не причина прятать: видно, чего именно не хватает,
+     в подсказке и в самой иконке (бейдж «−»). */
+  .ico.poor { border-color: #4a3a2a; }
+  .ico.locked { opacity: .5; }
+  .ico .glyph { flex: none; width: 15px; text-align: center; font-size: 14px; line-height: 1.1; }
+  /* Имени хватает всей ширины панели, поэтому одна строка без обрыва: clamp в две
+     строки был платой за узкую ячейку сетки, а не желанием дизайна. */
+  .ico .cap {
+    flex: 1 1 auto; min-width: 0; font-size: 10px; line-height: 1.15; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Полоса заполнения склада — единственный абсолютный ребёнок значка: ширина
+     приходит инлайном из рендера, поэтому здесь только левый и нижний край. */
+  .ico .bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); border-radius: 0 0 6px 6px; }
+  /* Тир — цветом, как башни на поле: глаз цепляет полку до того, как прочтёт подпись. */
+  .tier1 .glyph { color: var(--muted); }
+  .tier2 .glyph { color: var(--ok); }
+  .tier3 .glyph { color: var(--warn); }
+
+  /* Карточка выбранной иконки. Подсказка живёт под курсором и на телефоне её нет —
+     здесь те же данные остаются читаемыми без мыши. */
+  .card { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 7px; margin-bottom: 6px; }
+  .card .h { font-size: 12px; color: var(--accent); }
+  .card .why { color: var(--text); margin: 3px 0 4px; }
+
+  /* ─── Всплывающая подсказка ────────────────────────────────────────────────
+     Своё, а не нативный `title`: `title` не умеет ни в таблицу, ни в цвет дефицита,
+     ни в разумную задержку, а показывать «что строится / зачем / за что / сколько
+     ждать» одой строкой текста — значит не показать ничего. */
+  #tip {
+    position: fixed; z-index: 30; display: none; max-width: 300px; pointer-events: none;
+    background: #0f151d; border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px;
+    font-size: 11px; line-height: 1.35; color: var(--text); box-shadow: 0 8px 22px rgba(0, 0, 0, .6);
+  }
+  #tip.on { display: block; }
+  /* Содержимое подсказки размечается классом, а не `#tip`, потому что те же самые
+     заголовки, таблицы и чипы цены вставляет карточка выбранной иконки: два
+     пересказа одних данных стоили бы расхождения, а два набора стилей — того же
+     самого в оформлении. */
+  .tipCard .h { font-size: 12px; color: var(--accent); font-weight: 700; }
+  .tipCard .k { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  .tipCard .why { color: var(--text); margin: 3px 0 4px; }
+  .tipCard dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; }
+  .tipCard dt { color: var(--muted); white-space: nowrap; }
+  .tipCard dd { margin: 0; text-align: right; }
+  .tipCard .costs { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+  .tipCard .c { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 10px; white-space: nowrap; }
+  .tipCard .c.have { border-color: #2f6b45; color: #9ae8bb; }
+  .tipCard .c.lack { border-color: var(--err); color: #f0a29b; }
+  .tipCard .foot { margin-top: 4px; padding-top: 3px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 </style>
 </head>
 <body>
@@ -177,16 +275,19 @@
   </section>
 
   <aside>
-    <details class="panel" id="pnlBase" open><summary>Планировка <span class="tag" id="baseTag">&mdash;</span></summary><div class="panelBody" id="baseBody">&mdash;</div></details>
-    <details class="panel" id="pnlInv" open><summary>Инвентарь <span class="tag" id="invTag">0</span></summary><div class="panelBody list muted" id="invBody">&mdash;</div></details>
-    <details class="panel" id="pnlShop" open><summary>Мастерская <span class="tag" id="shopTag">0/0</span></summary><div class="panelBody" id="shopBody">&mdash;</div></details>
-    <details class="panel" id="pnlEco" open><summary>Экономика <span class="tag" id="ecoTag">&mdash;</span></summary><div class="panelBody" id="ecoBody">&mdash;</div></details>
-    <details class="panel" id="pnlPwr"><summary>Энергосеть <span class="tag" id="pwrTag">&mdash;</span></summary><div class="panelBody muted" id="pwrBody">&mdash;</div></details>
-    <details class="panel" id="pnlDef"><summary>Оборона <span class="tag" id="defTag">&mdash;</span></summary><div class="panelBody" id="defBody">&mdash;</div></details>
-    <details class="panel" id="pnlPvp"><summary>PvP <span class="tag" id="pvpTag">&mdash;</span></summary><div class="panelBody" id="pvpBody">&mdash;</div></details>
-    <details class="panel" id="pnlClan"><summary>Клан <span class="tag" id="clanTag">&mdash;</span></summary><div class="panelBody" id="clanBody">&mdash;</div></details>
-    <details class="panel" id="pnlMkt"><summary>Рынок <span class="tag" id="mktTag">&mdash;</span></summary><div class="panelBody" id="mktBody">&mdash;</div></details>
-    <details class="panel" id="pnlLog" open><summary>Журнал</summary><div class="panelBody" id="log"></div></details>
+    <nav id="tabs" aria-label="Разделы базы"></nav>
+    <div id="panels">
+      <section class="panel" id="pnlEco" hidden><h2>Экономика <span class="tag" id="ecoTag">&mdash;</span></h2><div class="panelBody" id="ecoBody">&mdash;</div></section>
+      <section class="panel" id="pnlShop" hidden><h2>Мастерская <span class="tag" id="shopTag">0/0</span></h2><div class="panelBody" id="shopBody">&mdash;</div></section>
+      <section class="panel" id="pnlPwr" hidden><h2>Энергосеть <span class="tag" id="pwrTag">&mdash;</span></h2><div class="panelBody" id="pwrBody">&mdash;</div></section>
+      <section class="panel" id="pnlBase" hidden><h2>Планировка <span class="tag" id="baseTag">&mdash;</span></h2><div class="panelBody" id="baseBody">&mdash;</div></section>
+      <section class="panel" id="pnlInv" hidden><h2>Инвентарь <span class="tag" id="invTag">0</span></h2><div class="panelBody" id="invBody">&mdash;</div></section>
+      <section class="panel" id="pnlDef" hidden><h2>Оборона <span class="tag" id="defTag">&mdash;</span></h2><div class="panelBody" id="defBody">&mdash;</div></section>
+      <section class="panel" id="pnlPvp" hidden><h2>PvP <span class="tag" id="pvpTag">&mdash;</span></h2><div class="panelBody" id="pvpBody">&mdash;</div></section>
+      <section class="panel" id="pnlClan" hidden><h2>Клан <span class="tag" id="clanTag">&mdash;</span></h2><div class="panelBody" id="clanBody">&mdash;</div></section>
+      <section class="panel" id="pnlMkt" hidden><h2>Рынок <span class="tag" id="mktTag">&mdash;</span></h2><div class="panelBody" id="mktBody">&mdash;</div></section>
+      <section class="panel" id="pnlLog" hidden><h2>Журнал <span class="tag" id="logTag">&mdash;</span></h2><div class="panelBody" id="log"></div></section>
+    </div>
   </aside>
 </main>
 
@@ -230,7 +331,13 @@ const S = {
   blueprints: null,   // GET /v1/workshop/blueprints
   opponent: null,     // GET /v1/pvp/opponent
   armySel: {},        // itemId -> true (состав рейда)
-  replay: null        // состояние проигрывателя боя
+  replay: null,       // состояние проигрывателя боя
+  tab: 'eco',         // открытый раздел правой колонки
+  bpSel: null,        // выбранный чертёж (иконка в мастерской)
+  stSel: null,        // выбранное сооружение (иконка в энергосети)
+  itemSel: null,      // выбранный предмет инвентаря (иконка в ангаре)
+  logErr: 0,          // ошибок журнала с последнего визита в раздел — бейдж ярлыка
+  market: null        // GET /v1/market
 };
 
 const $ = (id) => document.getElementById(id);
@@ -253,6 +360,758 @@ function esc(value) {
 const ok = (v) => '<span class="ok">' + v + '</span>';
 const bad = (v) => '<span class="err">' + v + '</span>';
 
+// ─── Приборная панель правой колонки ─────────────────────────────────────────
+/*
+ * Десять свёрнутых панелей означали «прокрути список, пока найдёшь очередь стройки».
+ * Правая колонка собрана здесь в два уровня ярлыков:
+ *
+ *   1. разделы — что вообще есть в игре (экономика, цех, сеть, планировка …);
+ *   2. предметы внутри раздела — что именно можно построить и что уже стоит.
+ *
+ * Подсказка на обоих уровнях отвечает на четыре вопроса сразу: ЧТО это, ЗАЧЕМ,
+ * ЗА ЧТО платится и СКОЛЬКО ЖДАТЬ. Все четыре формулировки приходят с сервера:
+ * «зачем» — `Blueprint.role` / `StructureDef.role`, боевые цифры — `pvp.units`,
+ * подписи материалов — `labels.materials`. Единственная локальная математика —
+ * сравнение «нужно 200, есть 120»: оба числа серверовы, и дефицит витрина обязана
+ * показать ДО нажатия кнопки, иначе игрок узнаёт о нехватке отказом кассы.
+ */
+
+/** Порядок ярлыков = частота обращения: первым делом крутят экономику и цех. */
+const TABS = [
+  { id: 'eco', panel: 'pnlEco', glyph: '▤', cap: 'Экономика', title: 'Склады, энергия, сбор' },
+  { id: 'shop', panel: 'pnlShop', glyph: '⚒', cap: 'Цех', title: 'Мастерская: чертежи и очередь сборки' },
+  { id: 'pwr', panel: 'pnlPwr', glyph: '⚡', cap: 'Сеть', title: 'Энергосеть: реакторы, кулеры, цехи, стойки' },
+  { id: 'base', panel: 'pnlBase', glyph: '▦', cap: 'База', title: 'Планировка: стены, башни, дорога' },
+  { id: 'inv', panel: 'pnlInv', glyph: '⬢', cap: 'Ангар', title: 'Инвентарь: собранная техника' },
+  { id: 'def', panel: 'pnlDef', glyph: '◎', cap: 'Щит', title: 'Оборона: станиумный модуль базы' },
+  { id: 'pvp', panel: 'pnlPvp', glyph: '⚔', cap: 'Рейд', title: 'PvP: соперник, армия, атака' },
+  { id: 'clan', panel: 'pnlClan', glyph: '⌂', cap: 'Клан', title: 'Клан и общая казна' },
+  { id: 'mkt', panel: 'pnlMkt', glyph: '₽', cap: 'Рынок', title: 'Рынок: лоты и коридоры цен' },
+  { id: 'log', panel: 'pnlLog', glyph: '☰', cap: 'Журнал', title: 'Журнал: что сервер ответил на кнопки' }
+];
+
+/**
+ * Значки. Декоративный слой, поэтому живёт здесь, а не на сервере: на баланс эти
+ * глифы влияют нулём, а правило «арт локален, цифры серверные» в этом файле уже
+ * задают `TURRET_ART` и `DRONE_ART` над полем боя.
+ */
+const KIND_GLYPH = { tower: '♜', weapon: '⌖', drone: '✈' };
+const KIND_LABEL = { tower: 'башня', weapon: 'орудие', drone: 'дрон' };
+
+/** Значки накопителей: по одному на ресурс из `STORAGE_IDS`. Чисто оформление. */
+const STORAGE_GLYPH = { ferrum: '⬔', silicium: '⬕', uranium: '◈', plasma: '✦', deuterium: '◍', nitrogen: '❆' };
+
+/** Род сооружения выводится из его декларации, а не выписывается кодом: новый цех
+ *  попадёт в существующую категорию автоматически, без правки витрины. */
+function structureFamily(def) {
+  if (def.power > 0) return 'gen';
+  if (def.cooling > 0) return 'cool';
+  if (def.coinOutput) return 'compute';
+  if (def.mine) return 'mine';
+  if (def.output) return 'chem';
+  if (def.storage) return 'tank';
+  return 'plain';
+}
+
+const FAMILY_GLYPH = { gen: '♨', cool: '❄', compute: '▣', mine: '⛏', chem: '⚗', tank: '⬛', plain: '▪' };
+const FAMILY_LABEL = {
+  gen: 'генерация', cool: 'охлаждение', compute: 'вычисление',
+  mine: 'добыча', chem: 'химия', tank: 'ёмкость', plain: 'сооружение'
+};
+
+/** Класс техники в сети — дословно из серверного профиля (`units[code].class`). */
+const POWER_CLASS_LABEL = {
+  grid: 'проводная: ест электричество базы',
+  battery: 'на батарее: заряжается от резерва сети',
+  autonomous: 'свой реактор: ест дейтерий, а не сеть базы'
+};
+
+const TAB_KEY = 'td.play.tab';
+
+/**
+ * Причины, по которым клана ещё нет. Подняты из тела `renderClan` сюда, потому что
+ * теперь их читают два места — бейдж ярлыка и панель; копия словаря в втором месте
+ * однажды разошлась бы с первым, и игрок прочитал бы две разные причины об одном
+ * отказе. Словарь — про формулировку отказа, а не про баланс: сами причины
+ * (`canCreate`, `reason`) выводит сервер.
+ */
+const CLAN_WHY = { ok: '', member: 'вы уже в клане', funds: 'не хватает астерия', debt: 'долг по донату' };
+
+/** Запас материала на складе игрока. Все четыре пула — серверовы (`economy.*`). */
+function stockOf(id) {
+  const eco = S.snap && S.snap.economy;
+  if (!eco) return 0;
+  for (const pool of [eco.resources, eco.metals, eco.junk, eco.materials]) {
+    if (pool && typeof pool[id] === 'number') return pool[id];
+  }
+  return 0;
+}
+
+/** SEC тратится целым (`secSpendable`), поэтому и спрашиваем про целое. */
+function secWallet() {
+  const eco = S.snap && S.snap.economy;
+  return eco ? eco.resources.secSpendable : 0;
+}
+
+/**
+ * Разбор цены по материалам: что нужно, что есть, чего не хватает.
+ *
+ * Порядок ключей сохраняется таким, каким его отдал конфиг, — витрина, отсортировавшая
+ * цену по алфавиту, читается хуже, чем цена, в которой железо стоит на месте железа.
+ */
+function costRows(cost, secCost) {
+  const rows = [];
+  for (const [id, need] of Object.entries(cost || {})) {
+    const have = stockOf(id);
+    rows.push({ id, label: materialLabel(id), need, have, short: have < need });
+  }
+  const sec = Number(secCost || 0);
+  if (sec > 0) rows.push({ id: 'sec', label: 'SEC', need: sec, have: secWallet(), short: secWallet() < sec });
+  return rows;
+}
+
+function affordable(rows) {
+  return rows.every((row) => !row.short);
+}
+
+function materialLabel(id) {
+  const labels = S.blueprints && S.blueprints.labels;
+  return (labels && labels.materials && labels.materials[id]) || id;
+}
+
+/** Имя накопителя: из подписей сервера, а иначе — из витрины складов. */
+function storageLabel(id) {
+  const labels = S.blueprints && S.blueprints.labels;
+  if (labels && labels.storage && labels.storage[id]) return labels.storage[id];
+  const warehouses = S.snap && S.snap.economy && S.snap.economy.warehouses;
+  const row = warehouses && warehouses.find((w) => w.resource === id);
+  return row ? row.name : id;
+}
+
+function findBlueprint(code) {
+  const list = S.blueprints && S.blueprints.blueprints;
+  return (list && list.find((bp) => bp.code === code)) || null;
+}
+
+function findStructure(id) {
+  const list = S.blueprints && S.blueprints.structures;
+  return (list && list.find((def) => def.id === id)) || null;
+}
+
+/** Боевая карточка L1 из `/v1/config` (`pvp.units`). */
+function unitProfile(code) {
+  const units = (S.cfg && S.cfg.pvp && S.cfg.pvp.units) || {};
+  return units[code] || null;
+}
+
+/** Профиль эксплуатации в сети из `/v1/workshop/blueprints` (`units`). */
+function unitPower(code) {
+  const units = (S.blueprints && S.blueprints.units) || {};
+  return units[code] || null;
+}
+
+
+// ─── Всплывающие подсказки ────────────────────────────────────────────────────
+/*
+ * Один слушатель на документ, а не по обработчику на иконку: панели перерисовываются
+ * на каждый ответ сервера, и навешивать обработчики заново означало бы однажды
+ * забыть это в новом месте — и получить иконку без подсказки там, где важнее всего.
+ * Содержимое собирается лениво, в момент наведения: на 18 сооружениях и 10 чертежах
+ * предвычисление стоило бы каждой перерисовке лишний труд ни за что.
+ */
+const TIP = { el: null, owner: null };
+
+function tipNode() {
+  if (!TIP.el) {
+    TIP.el = document.createElement('div');
+    TIP.el.id = 'tip';
+    TIP.el.className = 'tipCard';
+    document.body.appendChild(TIP.el);
+  }
+  return TIP.el;
+}
+
+function tipHide() {
+  if (TIP.el) {
+    TIP.el.classList.remove('on');
+    TIP.el.innerHTML = '';
+  }
+  TIP.owner = null;
+}
+
+function tipShow(owner) {
+  const html = tipHtmlOf(owner);
+  if (!html) { tipHide(); return; }
+  const node = tipNode();
+  node.innerHTML = html;
+  node.classList.add('on');
+  const box = owner.getBoundingClientRect();
+  const w = node.offsetWidth;
+  const h = node.offsetHeight;
+  // Слева от иконки: колонка прижата к правому краю окна, и под ней подсказка
+  // полезла бы за нижний срез. Не влезло — вправо, и только потом вертикальные швы.
+  let x = box.left - w - 8;
+  if (x < 6) x = box.right + 8;
+  if (x + w > window.innerWidth - 6) x = Math.max(6, window.innerWidth - w - 6);
+  let y = box.top;
+  if (y + h > window.innerHeight - 6) y = Math.max(6, window.innerHeight - h - 6);
+  node.style.left = Math.round(x) + 'px';
+  node.style.top = Math.round(y) + 'px';
+  TIP.owner = owner;
+}
+
+function bindTips() {
+  const ownerOf = (target) => (target instanceof Element ? target.closest('[data-tip]') : null);
+  document.addEventListener('mouseover', (event) => {
+    const owner = ownerOf(event.target);
+    if (owner === TIP.owner) return;
+    if (!owner) { tipHide(); return; }
+    tipShow(owner);
+  });
+  document.addEventListener('mouseout', (event) => {
+    if (!TIP.owner) return;
+    if (ownerOf(event.target) === TIP.owner) tipHide();
+  });
+  document.addEventListener('focusin', (event) => {
+    const owner = ownerOf(event.target);
+    if (owner) tipShow(owner);
+  });
+  document.addEventListener('focusout', tipHide);
+  // Прокрутка и Esc уводят подсказку вместе с тем, что она объясняла.
+  window.addEventListener('scroll', tipHide, true);
+  window.addEventListener('keydown', (event) => { if (event.key === 'Escape') tipHide(); });
+  // После клика данные устареют раньше, чем курсор успеет уйти: ответ сервера
+  // перерисует панель целиком.
+  document.addEventListener('click', tipHide);
+}
+
+const tipDl = (rows) => '<dl>' + rows.map((r) => '<dt>' + esc(r[0]) + '</dt><dd>' + r[1] + '</dd>').join('') + '</dl>';
+const tipHead = (title, kicker) =>
+  '<div class="h">' + esc(title) + '</div>' + (kicker ? '<div class="k">' + esc(kicker) + '</div>' : '');
+const tipWhy = (text) => (text ? '<div class="why">' + esc(text) + '</div>' : '');
+const tipFoot = (text) => (text ? '<div class="foot">' + esc(text) + '</div>' : '');
+
+/** Чипы цены: зелёные — есть на складе, красные — чего не хватает и сколько. */
+function tipCosts(rows) {
+  if (!rows.length) return '';
+  return '<div class="costs">' + rows.map((row) => {
+    const text = row.label + ' ' + fmtNum(row.need) + (row.short ? ' · есть ' + fmtNum(row.have) : '');
+    return '<span class="c ' + (row.short ? 'lack' : 'have') + '">' + esc(text) + '</span>';
+  }).join('') + '</div>';
+}
+
+function tipHtmlOf(owner) {
+  const kind = owner.getAttribute('data-tip');
+  const key = owner.getAttribute('data-key') || '';
+  if (kind === 'tab') return tabTipHtml(key);
+  if (kind === 'bp') return blueprintTipHtml(key);
+  if (kind === 'st') return structureTipHtml(key);
+  if (kind === 'wh') return warehouseTipHtml(key);
+  if (kind === 'item') return itemTipHtml(key);
+  if (kind === 'job') return jobTipHtml(key);
+  return '';
+}
+
+function tabTipHtml(id) {
+  const tab = TABS.find((t) => t.id === id);
+  if (!tab) return '';
+  const badge = tabBadge(id);
+  return tipHead(tab.title, 'раздел') + tipWhy(badge.long) + tipFoot(badge.hint);
+}
+
+/**
+ * Боевая карточка из `pvp.units` (L1) + правило прокачки из того же ответа.
+ *
+ * Цифры другого уровня здесь НЕ пересчитываются: формула `1 + step × (level − 1)`
+ * принадлежит серверу, и витрина, дописавшая её у себя, расходится с боем на первом
+ * же баланс-патче. Игрок видит, что даёт чертёж с конвейера, и знает шаг надбавки.
+ */
+function combatRows(code) {
+  const profile = unitProfile(code);
+  if (!profile) return [];
+  const rows = [
+    ['урон', fmtNum(profile.dps) + ' DPS'],
+    ['прочность', fmtNum(profile.hp) + ' ед.'],
+    ['радиус', fmtNum(profile.range) + ' кл.']
+  ];
+  if (profile.squad != null) rows.push(['рой', profile.squad + ' машин из 1 предмета']);
+  if (profile.speed != null) rows.push(['скорость', fmtNum(profile.speed) + ' кл./с']);
+  return rows;
+}
+
+function levelStepNote() {
+  const levels = S.cfg && S.cfg.pvp && S.cfg.pvp.levels;
+  if (!levels) return '';
+  return '+' + Math.round(levels.dpsStep * 100) + '% урона и +' +
+    Math.round(levels.hpStep * 100) + '% прочности за уровень';
+}
+
+/** Как техника стоит в сети базы — дословно профиль `units` из каталога мастерской. */
+function gridRows(code) {
+  const profile = unitPower(code);
+  if (!profile) return [];
+  const rows = [['в сети', POWER_CLASS_LABEL[profile.class] || profile.class]];
+  if (profile.idle > 0) rows.push(['дежурство', fmtNum(profile.idle) + ' кВт из сети базы']);
+  if (profile.combat > 0) rows.push(['в бою', fmtNum(profile.combat) + ' кВт']);
+  if (profile.heat > 0) rows.push(['тепло в бою', fmtNum(profile.heat) + ' кВт — нужен отвод']);
+  if (profile.fuelPerHour > 0) rows.push(['своё топливо', fmtNum(profile.fuelPerHour) + ' дейтерия/ч']);
+  return rows;
+}
+
+function blueprintTipHtml(code) {
+  const bp = findBlueprint(code);
+  if (!bp) return '';
+  const rows = [['сборка', fmtMs(bp.buildMs) + ' · 1 робот']]
+    .concat(combatRows(code))
+    .concat(gridRows(code));
+  const junk = (bp.scrap || []).map((drop) =>
+    materialLabel(drop.junk) + ' ' + drop.min + '–' + drop.max + ' (' + Math.round(drop.chance * 100) + '%)');
+  const salvage = bp.salvageRate != null ? Math.round(bp.salvageRate * 100) : 50;
+  return tipHead(bp.name, 'T' + bp.tier + ' · ' + (KIND_LABEL[bp.kind] || bp.kind)) +
+    tipWhy(bp.role) +
+    tipDl(rows) +
+    tipCosts(costRows(bp.cost, 0)) +
+    tipFoot('утилизация: ' + (junk.length ? junk.join(', ') : 'таблицы нет') +
+      ' · разбор возвращает ' + salvage + '% вложенного' +
+      (levelStepNote() ? ' · ' + levelStepNote() : ''));
+}
+
+/** Витрина сооружений снпшота по коду: сколько стоит, сколько стоит, разблокировано ли. */
+function structureViewOf(id) {
+  const list = S.snap && S.snap.economy && S.snap.economy.structures;
+  return (list && list.find((s) => s.id === id)) || null;
+}
+
+/** Строка узла сети по коду: сколько экземпляров реально в строю и почему. */
+function gridRowOf(code) {
+  const rows = S.snap && S.snap.economy && S.snap.economy.power && S.snap.economy.power.rows;
+  return (rows && rows.find((r) => r.code === code)) || null;
+}
+
+const GRID_WHY = { fuel: 'нет топлива', power: 'не хватило мощности', cooling: 'нет азота', output: 'некуда лить продукт' };
+
+/** Что сооружение делает физически — дословно его декларация из реестра. */
+function structureEffectRows(def) {
+  const rows = [];
+  if (def.power > 0) rows.push(['мощность', ok('+' + fmtNum(def.power) + ' кВт')]);
+  if (def.power < 0) rows.push(['мощность', bad(fmtNum(def.power) + ' кВт')]);
+  if (def.heat > 0) rows.push(['тепло', fmtNum(def.heat) + ' кВт — надо отводить']);
+  if (def.cooling > 0) rows.push(['отвод тепла', ok(fmtNum(def.cooling) + ' кВт')]);
+  if (def.fuel) rows.push(['топливо', 'жжёт ' + fmtNum(def.fuel.perHour) + '/ч · ' + storageLabel(def.fuel.resource)]);
+  if (def.output) rows.push(['выпуск', 'льёт ' + fmtNum(def.output.perHour) + '/ч · ' + storageLabel(def.output.resource)]);
+  if (def.coinOutput) rows.push(['монета', '+' + fmtNum(def.coinOutput.perHour) + ' SEC/ч']);
+  if (def.mine) rows.push(['добыча', '+' + fmtNum(def.mine.perHour) + '/ч · ' + def.mine.resources.map(storageLabel).join('·')]);
+  if (def.storage) rows.push(['ёмкость', '+' + fmtNum(def.storage.capacity) + ' · ' + def.storage.resources.map(storageLabel).join('·')]);
+  return rows;
+}
+
+function structureTipHtml(id) {
+  const def = findStructure(id);
+  if (!def) return '';
+  const view = structureViewOf(id);
+  const rows = structureEffectRows(def);
+  rows.push(['сборка', fmtMs(def.buildMs) + ' · 1 робот']);
+  if (def.maxPerBase) rows.push(['потолок', def.maxPerBase + ' шт. на базу']);
+
+  const requires = Object.entries(def.requires || {});
+  if (requires.length) {
+    const parts = requires.map(([code, need]) => {
+      const have = (structureViewOf(code) || { count: 0 }).count;
+      const name = (findStructure(code) || { name: code }).name;
+      return { text: need + ' × ' + name + ' (стоит ' + have + ')', met: have >= need };
+    });
+    rows.push(['предшественник', parts.map((p) => (p.met ? ok(p.text) : bad(p.text))).join('<br>')]);
+  }
+  if (view) {
+    rows.push(['уже стоит', view.count + ' шт.']);
+    const node = gridRowOf(id);
+    if (node && node.instances > 0) {
+      rows.push(['в строю', node.offline === 0
+        ? ok(node.online + '/' + node.instances)
+        : bad(node.online + '/' + node.instances) + ' · ' + (GRID_WHY[node.reason] || node.reason)]);
+    }
+  }
+  const heatNote = def.heat > 0 && S.blueprints && S.blueprints.power
+    ? '1 ед. азота отводит ' + fmtNum(S.blueprints.power.heatPerNitrogen) + ' кВт-тепла'
+    : '';
+  return tipHead(def.name, 'T' + def.tier + ' · ' + (FAMILY_LABEL[structureFamily(def)] || 'сооружение')) +
+    tipWhy(def.role) +
+    tipDl(rows) +
+    tipCosts(costRows(def.cost, view ? view.secCost : def.secCost)) +
+    tipFoot(heatNote);
+}
+
+/** Кто расширяет этот накопитель: сооружения с `storage` на данный ресурс. */
+function capacityDonors(resource) {
+  const list = (S.blueprints && S.blueprints.structures) || [];
+  const parts = [];
+  for (const def of list) {
+    if (!def.storage || !def.storage.resources.includes(resource)) continue;
+    const count = (structureViewOf(def.id) || { count: 0 }).count;
+    parts.push({ name: def.name, count, each: def.storage.capacity, built: count > 0 });
+  }
+  return parts;
+}
+
+function warehouseTipHtml(resource) {
+  const list = S.snap && S.snap.economy && S.snap.economy.warehouses;
+  const wh = list && list.find((w) => w.resource === resource);
+  if (!wh) return '';
+  const rows = [
+    ['на складе', fmtNum(wh.stored) + ' / ' + fmtNum(wh.capacity)],
+    ['приход', fmtNum(wh.ratePerHour) + '/ч']
+  ];
+  if (wh.consumePerHour > 0) rows.push(['расход', fmtNum(wh.consumePerHour) + '/ч — база тратит сама']);
+  rows.push(['заполнено', wh.isFull ? ok('полон') : Math.round(wh.fillRatio * 100) + '%']);
+  rows.push(['полон через', wh.nextFillAt ? fmtMs(new Date(wh.nextFillAt).getTime() - Date.now()) : '—']);
+
+  const donors = capacityDonors(resource);
+  const built = donors.filter((d) => d.built)
+    .map((d) => d.name + ' ×' + d.count + ' (+' + fmtNum(d.each * d.count) + ')');
+  const next = donors.filter((d) => !d.built).map((d) => d.name + ' (+' + fmtNum(d.each) + ')');
+
+  return tipHead(wh.name, wh.collectible ? 'собирается рукой' : 'расходует база') +
+    tipWhy(wh.collectible
+      ? 'Руда копится до потолка и ждёт руки игрока. Собрать выгодно перед рейдом: трофеи считают по несобранным складам.'
+      : 'Промышленный газ: цистерны наполняются тиком и расходуются автоматом, рукой не собирается.') +
+    tipDl(rows) +
+    tipFoot((built.length ? 'ёмкость дают: ' + built.join(', ') : 'ёмкость не расширена') +
+      (next.length ? ' · можно построить: ' + next.join(', ') : ''));
+}
+
+function itemTipHtml(itemId) {
+  const item = itemOf(itemId);
+  if (!item) return '';
+  const placed = ((S.draft && S.draft.units) || []).find((unit) => unit.itemId === itemId);
+  const rows = [['роль', itemRole(item)]];
+  if (placed) rows.push(['на карте', placed.x + ',' + placed.y]);
+  return tipHead(item.name, 'T' + item.tier + ' · L' + item.level) +
+    tipDl(rows.concat(combatRows(item.code)).concat(gridRows(item.code))) +
+    tipFoot(levelStepNote() + ' · цифры выше — с конвейера (L1)');
+}
+
+function jobTipHtml(jobId) {
+  const job = ((S.snap && S.snap.economy && S.snap.economy.builds) || []).find((j) => j.id === jobId);
+  if (!job) return '';
+  const quote = job.cancel;
+  const rows = [
+    ['природа', job.kind === 'structure' ? 'сооружение — счётчик на базе, не предмет' : 'предмет — приедет в инвентарь'],
+    ['осталось', job.done ? 'готово, ждёт места в инвентаре' : fmtMs(job.remainingMs)],
+    ['прогресс', Math.round(((quote && quote.progress) || 0) * 100) + '%']
+  ];
+  if (job.speedup && typeof job.speedup.cost === 'number') rows.push(['ускорить', job.speedup.cost + ' хрониум']);
+  const def = job.kind === 'structure' ? findStructure(job.code) : findBlueprint(job.code);
+  return tipHead(job.name, 'в очереди · L' + job.level) +
+    tipWhy(def && def.role ? def.role : 'работа робота-строителя') +
+    tipDl(rows) +
+    tipFoot(refundText(quote));
+}
+
+/** Короткая подпись значка: «Мк.» уезжает, римская цифра остаётся. */
+function iconCaption(name) {
+  return String(name || '').replace(/\s*Mk\./, ' ').trim();
+}
+
+/**
+ * Одна иконка. Клик по ней — ВЫБОР, а не действие: случайный палец в WebView
+ * не должен списывать 1500 железа. Сама кнопка «строить» живёт в карточке выбранного.
+ */
+function iconHtml(spec) {
+  const cls = ['ico', 'tier' + (spec.tier || 1)];
+  if (spec.sel) cls.push('sel');
+  if (spec.locked) cls.push('locked');
+  else if (spec.poor) cls.push('poor');
+  const cnt = spec.cnt ? '<span class="cnt ' + (spec.cntCls || '') + '">' + esc(spec.cnt) + '</span>' : '';
+  const bar = spec.bar == null ? '' :
+    '<span class="bar" style="width:' + Math.max(0, Math.min(100, Math.round(spec.bar * 100))) + '%"></span>';
+  return '<button class="' + cls.join(' ') + '" data-tip="' + spec.tip + '" data-key="' + esc(spec.key) +
+    '" onclick="' + spec.onclick + '">' +
+    '<span class="glyph">' + spec.glyph + '</span>' +
+    '<span class="cap">' + esc(iconCaption(spec.cap)) + '</span>' + cnt + bar + '</button>';
+}
+
+/** Чертежи мастерской: значок = вид, цвет = тир, бейдж = сколько ждать. */
+function blueprintGridHtml() {
+  const list = (S.blueprints && S.blueprints.blueprints) || [];
+  if (!list.length) return '<div class="muted">каталог чертежей не загружен</div>';
+  return '<div class="icoGrid">' + list.map((bp) => {
+    const rows = costRows(bp.cost, 0);
+    const enough = affordable(rows);
+    return iconHtml({
+      tier: bp.tier, tip: 'bp', key: bp.code, cap: bp.name,
+      glyph: KIND_GLYPH[bp.kind] || '▪',
+      sel: S.bpSel === bp.code,
+      poor: !enough,
+      cnt: fmtMs(bp.buildMs),
+      cntCls: enough ? '' : 'warn',
+      onclick: 'TD.selectBp(\'' + bp.code + '\')'
+    });
+  }).join('') + '</div>';
+}
+
+const FAMILY_ORDER = ['mine', 'gen', 'cool', 'chem', 'compute', 'tank', 'plain'];
+
+/**
+ * Сооружения, сгруппированные по роду: бур/реактор/кулер/цех/стойка/ёмкость.
+ *
+ * Группировка нужна затем, чтобы порядок в списке объяснял технологию, а не
+ * порядок в реестре конфига: сначала то, что роет руду, потом то, что жжёт её в
+ * мощность, затем то, что отводит тепло, — ровно та цепочка, которую игрок обязан
+ * пройти, чтобы ASIC вообще заработал.
+ */
+function structureGridHtml() {
+  const list = (S.blueprints && S.blueprints.structures) || [];
+  if (!list.length) return '<div class="muted">реестр сооружений не загружен</div>';
+  const groups = new Map();
+  for (const def of list) {
+    const family = structureFamily(def);
+    if (!groups.has(family)) groups.set(family, []);
+    groups.get(family).push(def);
+  }
+  const order = FAMILY_ORDER.filter((family) => groups.has(family))
+    .concat([...groups.keys()].filter((family) => !FAMILY_ORDER.includes(family)));
+  return order.map((family) => {
+    const head = '<div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 2px">' +
+      esc(FAMILY_LABEL[family] || family) + '</div>';
+    return head + '<div class="icoGrid">' + groups.get(family).map((def) => {
+      const view = structureViewOf(def.id) || null;
+      const locked = view ? !view.unlocked : false;
+      const rows = costRows(def.cost, view ? view.secCost : def.secCost);
+      const enough = affordable(rows);
+      const atMax = view && def.maxPerBase > 0 && view.count >= def.maxPerBase;
+      return iconHtml({
+        tier: def.tier, tip: 'st', key: def.id, cap: def.name,
+        glyph: FAMILY_GLYPH[family] || '▪',
+        sel: S.stSel === def.id,
+        locked: locked || Boolean(atMax),
+        poor: !enough,
+        cnt: view && view.count > 0 ? '×' + view.count : fmtMs(def.buildMs),
+        cntCls: view && view.count > 0 ? 'ok' : (enough ? '' : 'warn'),
+        onclick: 'TD.selectSt(\'' + def.id + '\')'
+      });
+    }).join('') + '</div>';
+  }).join('');
+}
+
+/**
+ * Карточка выбранного чертежа. Подсказка живёт под курсором и на тачскрине её нет
+ * вовсе, поэтому всё, что она объясняет, дублируется здесь — тем же кодом сборки,
+ * а не вторым пересказом: два текста однажды разойдутся, и один из них окажется
+ * враньём.
+ */
+function blueprintCardHtml() {
+  const code = S.bpSel;
+  if (!code) return '';
+  const bp = findBlueprint(code);
+  if (!bp) return '';
+  const rows = costRows(bp.cost, 0);
+  const enough = affordable(rows);
+  const free = (S.snap && S.snap.economy && S.snap.economy.builders.free) || 0;
+  const ready = enough && free > 0;
+  const reason = !enough ? bad('не хватает материалов') : free > 0 ? '' : bad('нет свободного робота');
+  return '<div class="card tipCard">' + blueprintTipHtml(code) +
+    '<div class="row" style="margin-top:6px">' +
+    '<button' + (ready ? '' : ' disabled') + ' onclick="TD.build()">Строить</button>' +
+    (reason ? '<span class="pill">' + reason + '</span>' : '') +
+    '<span class="pill">роботов свободно ' + free + '</span>' +
+    '</div></div>';
+}
+
+function structureCardHtml() {
+  const id = S.stSel;
+  if (!id) return '';
+  const def = findStructure(id);
+  if (!def) return '';
+  const view = structureViewOf(id);
+  const rows = costRows(def.cost, view ? view.secCost : def.secCost);
+  const enough = affordable(rows);
+  const locked = view ? !view.unlocked : false;
+  const atMax = Boolean(view && def.maxPerBase > 0 && view.count >= def.maxPerBase);
+  const free = (S.snap && S.snap.economy && S.snap.economy.builders.free) || 0;
+  const ready = enough && !locked && !atMax && free > 0;
+  const reason = locked ? bad('не выполнен предшественник')
+    : atMax ? bad('потолок ' + def.maxPerBase + ' на базу')
+      : !enough ? bad('не хватает материалов')
+        : free > 0 ? '' : bad('нет свободного робота');
+  return '<div class="card tipCard">' + structureTipHtml(id) +
+    '<div class="row" style="margin-top:6px">' +
+    '<button' + (ready ? '' : ' disabled') + ' onclick="TD.buildStructure(\'' + id + '\')">Строить</button>' +
+    (reason ? '<span class="pill">' + reason + '</span>' : '') +
+    '<span class="pill">роботов свободно ' + free + '</span>' +
+    '</div></div>';
+}
+
+/**
+ * Что ярлык показывает про свой раздел: короткую цифру на значок и развёрнутое
+ * предложение в подсказку. Всё из серверова снимка — раздел, чей бейдж выдуман
+ * локально, рано или поздно начнёт спорить с его же панелью.
+ */
+function tabBadge(id) {
+  const eco = S.snap && S.snap.economy;
+  if (id === 'log') {
+    const n = S.logErr || 0;
+    return {
+      text: n ? String(n) : '', cls: n ? 'err' : '',
+      long: 'Журнал кнопок: чем сервер ответил на каждое действие, включая отказы.',
+      hint: n ? 'Здесь ошибок: ' + n + ' — загляните, почему кнопка не сработала.' : ''
+    };
+  }
+  if (!eco) return { text: '—', cls: '', long: 'Раздел наполнится снимком базы после входа.', hint: '' };
+  switch (id) {
+    case 'eco': {
+      const full = eco.warehouses.filter((w) => w.collectible && w.isFull).length;
+      return {
+        text: full ? '↑' + full : String(eco.resources.energy), cls: full ? 'ok' : '',
+        long: 'Склады и энергия: ' + eco.resources.energy + '/' + eco.energy.cap + '⚡, набито ' +
+          full + '/' + eco.warehouses.length + ' складов.',
+        hint: full ? 'Соберите склад перед рейдом: трофеи считают по несобранным складам.'
+          : 'Чем выше потолок склада, тем реже нужна рука.'
+      };
+    }
+    case 'shop': {
+      const stuck = eco.builds.filter((j) => j.done).length;
+      return {
+        text: eco.builders.busy + '/' + eco.builders.max, cls: stuck ? 'warn' : '',
+        long: 'Роботы: занято ' + eco.builders.busy + ' из ' + eco.builders.max + ', в очереди ' + eco.builds.length + ' работ(ы).',
+        hint: stuck ? 'Готовая постройка ждёт места в инвентаре — разберите старьё.'
+          : 'Здесь собирают башни, орудия, дронов и сооружения.'
+      };
+    }
+    case 'pwr': {
+      const p = eco.power;
+      return {
+        text: p.isBalanced ? '✓' : '!', cls: p.isBalanced ? 'ok' : 'err',
+        long: 'Мощность ' + fmtNum(p.supplyOnline) + ' кВт генерации против ' + fmtNum(p.demandOnline) +
+          ' кВт потребления; тепло ' + fmtNum(p.heatLoad) + '/' + fmtNum(p.coolingCap) + ' кВт.',
+        hint: p.isBalanced ? 'Веер ничего не глушит: вся техника в строю.'
+          : 'Что-то глушится веером — причина названа прямо в панели.'
+      };
+    }
+    case 'base': {
+      return {
+        text: 'v' + eco.base.version, cls: S.dirty ? 'warn' : '',
+        long: 'Планировка: стен ' + eco.base.walls.length + ', башен ' + eco.base.units.length + '.',
+        hint: S.dirty ? 'Есть несохранённые правки — «Сохранить» активна.'
+          : 'Рисуйте лабиринт: чем длиннее дорога, тем больше времени у башен.'
+      };
+    }
+    case 'inv': {
+      return {
+        text: String(eco.inventory.length), cls: '',
+        long: 'Ангар: ' + eco.inventory.length + ' шт. собранной техники.',
+        hint: 'Отсюда башни уходят на карту, а дроны — в рейд.'
+      };
+    }
+    case 'def': {
+      const field = eco.materials.staniumField;
+      return {
+        text: field.active ? '✓' : '—', cls: field.active ? 'ok' : '',
+        long: field.active
+          ? 'Поле активно ещё ' + fmtMs(field.remainingMs) + ': дроны соперника медленнее на ' + field.slowPercent + '%.'
+          : 'Станиумного поля нет: атакующие летят на полной скорости.',
+        hint: 'Срок поля сервер проверяет по времени боя, а не по времени постройки.'
+      };
+    }
+    case 'pvp': {
+      return {
+        text: String(eco.pvp.attacksRemaining), cls: eco.pvp.attacksRemaining ? '' : 'warn',
+        long: 'Рейтинг ' + eco.pvp.rating + ' (' + eco.pvp.ladder.name + '), атак сегодня осталось ' +
+          eco.pvp.attacksRemaining + ' по ' + eco.pvp.attackCost + '⚡.',
+        hint: 'Состав армии сервер берёт из инвентаря по id предметов, а не из клиента.'
+      };
+    }
+    case 'clan': {
+      const membership = S.clan && S.clan.membership;
+      if (!membership) return { text: '—', cls: '', long: 'Витрина клана не загружена.', hint: '' };
+      const clan = membership.clan;
+      return {
+        text: clan ? '✓' : membership.canCreate ? '＋' : '—',
+        cls: clan || membership.canCreate ? 'ok' : '',
+        long: clan ? 'Клан «' + clan.name + '»: казна и пожертвования общие.'
+          : membership.canCreate ? 'Клана нет, астерия на основание хватает.'
+            : 'Клана нет: ' + (CLAN_WHY[membership.reason] || membership.reason || 'неясно'),
+        hint: 'Астерий списывается сразу, а клан активируется только после подтверждения списания журналом.'
+      };
+    }
+    case 'mkt': {
+      const lots = (S.market && S.market.market && S.market.market.lots) || [];
+      return {
+        text: String(lots.length), cls: '',
+        long: 'Рынок: ' + lots.length + ' чужих лотов. Хлам в эскроу уходит сразу — объявление без товара физически невозможно.',
+        hint: 'Комиссия 5% сгорает при продаже: монета уходит из обращения, а не переходит другому игроку.'
+      };
+    }
+    default:
+      return { text: '', cls: '', long: '', hint: '' };
+  }
+}
+
+/**
+ * Ряд ярлыков строится ОДИН раз. Перерисовывать его на каждый ответ сервера значит
+ * терять фокус и hover ровно в тот момент, когда игрок читает подсказку: экономика
+ * опрашивается каждые несколько секунд, а `<button>` после innerHTML — уже другой
+ * элемент, и курсор над ним ничего не помнит. Меняются только бейджи.
+ */
+function buildTabs() {
+  $('tabs').innerHTML = TABS.map((tab) =>
+    '<button class="tab" id="tab_' + tab.id + '" data-tip="tab" data-key="' + tab.id + '"' +
+    ' aria-label="' + esc(tab.title) + '" onclick="TD.tab(\'' + tab.id + '\')">' +
+    '<span class="glyph">' + tab.glyph + '</span>' +
+    '<span class="cap">' + esc(tab.cap) + '</span>' +
+    '<span class="badge" id="badge_' + tab.id + '"></span></button>').join('');
+}
+
+function renderTabs() {
+  if (!$('tabs')) return;
+  for (const tab of TABS) {
+    const badge = tabBadge(tab.id);
+    const node = $('badge_' + tab.id);
+    if (node) {
+      node.textContent = badge.text;
+      node.className = 'badge' + (badge.cls ? ' ' + badge.cls : '');
+    }
+    const button = $('tab_' + tab.id);
+    if (button) button.classList.toggle('on', S.tab === tab.id);
+    const panel = $(tab.panel);
+    if (panel) panel.hidden = S.tab !== tab.id;
+  }
+}
+
+function setTab(id) {
+  S.tab = TABS.some((tab) => tab.id === id) ? id : 'eco';
+  try {
+    localStorage.setItem(TAB_KEY, S.tab);
+  } catch {
+    // Приватный режим без хранилища: ярлык просто не запомнится, игра работает.
+  }
+  tipHide();
+  renderTabs();
+}
+
+/** Роль предмета ангара: тот же разбор, что делает витрина PvP и подсказка. */
+function itemRole(item) {
+  if (S.cfg.pvp.attack.kinds.includes(item.kind)) return 'штурм: идёт в рейд';
+  if (S.cfg.base.units.deployableKinds.includes(item.kind)) return 'оборона: ставится на карту';
+  return item.kind;
+}
+
+/** Карточка выбранного предмета ангара: те же цифры, что в подсказке, плюс действия. */
+function itemCardHtml() {
+  const item = itemOf(S.itemSel);
+  if (!item) return '';
+  const deployable = S.cfg.base.units.deployableKinds.includes(item.kind);
+  const onMap = ((S.draft && S.draft.units) || []).find((unit) => unit.itemId === item.id);
+  return '<div class="card tipCard">' + itemTipHtml(item.id) +
+    '<div class="row" style="margin-top:6px">' +
+    (deployable
+      ? (onMap
+        ? '<span class="pill">на карте ' + onMap.x + ',' + onMap.y + '</span>'
+        : '<button onclick="TD.pick(\'' + item.id + '\')">на карту</button>')
+      : '<span class="pill">' + esc(itemRole(item)) + '</span>') +
+    '<button class="err" onclick="TD.dismantle(\'' + item.id + '\')">разобрать</button>' +
+    (S.picked === item.id ? '<span class="pill ok">выбрана для установки</span>' : '') +
+    '</div></div>';
+}
 
 function clock() {
   return new Date().toLocaleTimeString('ru-RU', { hour12: false });
@@ -267,6 +1126,15 @@ function log(message, cls) {
   box.appendChild(line);
   while (box.childElementCount > 200) box.removeChild(box.firstChild);
   box.scrollTop = box.scrollHeight;
+  const count = $('logTag');
+  if (count) count.textContent = box.childElementCount + ' записей';
+  // Отказ виден только тому, кто открыл раздел «Журнал», а ярлыки прячут его за
+  // десятью другими. Счётчик ошибок на значке — единственный способ сообщить, что
+  // что-то не удалось, не вырывая у игрока текущую панель.
+  if (cls === 'err') {
+    S.logErr += 1;
+    renderTabs();
+  }
 }
 
 function fmtNum(value) {
@@ -2525,7 +3393,6 @@ function renderInventory() {
   if (!S.snap) { body.innerHTML = '<span class="muted">—</span>'; return; }
   const inventory = S.snap.economy.inventory;
   const placed = new Map((S.draft ? S.draft.units : []).map((unit) => [unit.itemId, unit]));
-  const kinds = S.cfg.base.units.deployableKinds;
   const attackKinds = S.cfg.pvp.attack.kinds;
   tag.textContent = inventory.length + ' шт.';
 
@@ -2534,28 +3401,23 @@ function renderInventory() {
     return;
   }
 
-  const rows = inventory.map((item) => {
+  const icons = inventory.map((item) => {
     const onMap = placed.get(item.id);
-    const role = attackKinds.includes(item.kind) ? 'атака' : kinds.includes(item.kind) ? 'оборона' : item.kind;
-    const actions = [];
-    if (kinds.includes(item.kind)) {
-      actions.push(onMap
-        ? '<span class="pill">на карте ' + onMap.x + ',' + onMap.y + '</span>'
-        : '<button onclick="TD.pick(\'' + item.id + '\')">на карту</button>');
-    }
-    if (S.picked === item.id) actions.push('<span class="pill ok">выбрана</span>');
-    actions.push('<button onclick="TD.dismantle(\'' + item.id + '\')">разобрать</button>');
-    return '<tr><td>' + esc(item.name) + ' <span class="muted">T' + item.tier + ' L' + item.level + ' · ' + role + '</span></td>' +
-      '<td class="num">' + actions.join(' ') + '</td></tr>';
+    return iconHtml({
+      tier: item.tier, tip: 'item', key: item.id, cap: item.name,
+      glyph: KIND_GLYPH[item.kind] || '▪',
+      sel: S.itemSel === item.id,
+      // Бейдж «L» — уровень, зелёный стоит на карте, жёлтый — летает в рейд.
+      cnt: 'L' + item.level,
+      cntCls: onMap ? 'ok' : attackKinds.includes(item.kind) ? 'warn' : '',
+      onclick: 'TD.selectItem(\'' + item.id + '\')'
+    });
   }).join('');
 
-  body.innerHTML = '<table>' + rows + '</table>';
-}
-
-function costText(cost) {
-  const entries = Object.entries(cost || {});
-  if (entries.length === 0) return '—';
-  return entries.map(([material, amount]) => fmtNum(amount) + ' ' + material).join(', ');
+  body.innerHTML =
+    '<div class="muted">Техника в ангаре: наведите на значок — урон, прочность и роль</div>' +
+    '<div class="icoGrid">' + icons + '</div>' +
+    itemCardHtml();
 }
 
 /**
@@ -2568,7 +3430,7 @@ function costText(cost) {
  */
 function refundText(quote) {
   if (!quote || !quote.canCancel) return 'не отменить';
-  const parts = Object.entries(quote.materials || {}).map(([id, amount]) => fmtNum(amount) + ' ' + id);
+  const parts = Object.entries(quote.materials || {}).map(([id, amount]) => fmtNum(amount) + ' ' + materialLabel(id));
   if (quote.sec > 0) parts.push(fmtNum(quote.sec) + ' SEC');
   const rate = Math.round((quote.refundRate || 0) * 100);
   const grace = quote.graceLeftMs > 0 ? ' · льгота ещё ' + fmtMs(quote.graceLeftMs) : '';
@@ -2583,10 +3445,11 @@ function renderShop() {
   const builders = eco.builders;
   tag.textContent = 'занято ' + builders.busy + '/' + builders.max;
 
-  const options = S.blueprints
-    ? S.blueprints.blueprints.map((blueprint) => '<option value="' + esc(blueprint.code) + '">' +
-      esc(blueprint.name) + ' · T' + blueprint.tier + ' · ' + blueprint.kind + ' · ' + fmtMs(blueprint.buildMs) + '</option>').join('')
-    : '<option>загрузка…</option>';
+  // Выбор чертежа живёт в S, а не в `<select>`: столбик иконок не умеет хранить
+  // состояние сама по себе, а перерисовка панели на каждый ответ сервера стёрла бы
+  // его вместе с DOM.
+  const list = (S.blueprints && S.blueprints.blueprints) || [];
+  if (!S.bpSel && list.length) S.bpSel = list[0].code;
 
   const queue = eco.builds.length
     ? '<table>' + eco.builds.map((job) => {
@@ -2600,7 +3463,7 @@ function renderShop() {
         const cancel = quote && quote.canCancel
           ? '<button class="err" onclick="TD.cancelBuild(\'' + job.id + '\')" title="' + esc(refundText(quote)) + '">отменить</button>'
           : '<button disabled title="' + esc(refusal) + '">отменить</button>';
-        return '<tr><td>' + esc(job.name) + ' <span class="muted">L' + job.level + ' · ' +
+        return '<tr><td data-tip="job" data-key="' + job.id + '">' + esc(job.name) + ' <span class="muted">L' + job.level + ' · ' +
           Math.round(((quote && quote.progress) || 0) * 100) + '%</span>' +
           (quote && quote.canCancel
             ? '<div class="muted" style="font-size:10px">' + esc(refundText(quote)) + '</div>'
@@ -2620,23 +3483,16 @@ function renderShop() {
       Math.round(rules.refundRate * 100) + '%. '
     : '';
   body.innerHTML =
-    '<div class="row"><select id="bpSelect" style="flex:1">' + options + '</select>' +
-    '<button onclick="TD.build()">Строить</button></div>' +
-    '<div class="muted" id="bpCost" style="margin-bottom:6px"></div>' +
+    '<div class="muted">Что собирать: значок ведёт к чертежу, наведение — к объяснению</div>' +
+    blueprintGridHtml() +
+    blueprintCardHtml() +
+    (eco.builds.length ? '<div class="muted" style="margin:4px 0 2px">Очередь роботов</div>' : '') +
     queue +
     '<div class="row" style="margin-top:6px"><button onclick="TD.speedupAll()">Ускорить всё' +
     (all.cost != null ? ' (' + all.cost + ' хрониум)' : '') + '</button>' +
     '<span class="pill">' + eco.materials.chronium + ' хрониум</span></div>' +
     '<p class="hint">' + cancelHint + 'Слоты строителя: ' + builders.free + ' свободен(о), следующий слот ' +
     (builders.nextPrice == null ? 'не продаётся' : builders.nextPrice + ' астерия') + '.</p>';
-
-  const showCost = () => {
-    const code = $('bpSelect').value;
-    const blueprint = S.blueprints && S.blueprints.blueprints.find((item) => item.code === code);
-    $('bpCost').textContent = blueprint ? 'нужно: ' + costText(blueprint.cost) : '';
-  };
-  $('bpSelect').addEventListener('change', showCost);
-  showCost();
 }
 
 function renderEconomy() {
@@ -2646,14 +3502,22 @@ function renderEconomy() {
   const eco = S.snap.economy;
   tag.textContent = 'кап ' + fmtNum(eco.storageCapacity);
 
-  const rows = eco.warehouses.map((warehouse) => '<tr><td>' + esc(warehouse.resource) + '</td>' +
-    '<td class="num">' + fmtNum(warehouse.stored) + '/' + fmtNum(warehouse.capacity) + '</td>' +
-    '<td class="num">' + fmtNum(warehouse.ratePerHour) + '/ч</td>' +
-    '<td class="num">' + (warehouse.isFull ? '<span class="ok">полон</span>' : Math.round(warehouse.fillRatio * 100) + '%') + '</td>' +
-    '<td class="num muted">' + (warehouse.nextFillAt ? fmtMs(new Date(warehouse.nextFillAt).getTime() - Date.now()) : '—') + '</td></tr>').join('');
+  // Склад как ярлык: полоса = заполнение, бейдж = процент, подсказка = ставка,
+  // срок до полного и кто расширяет ёмкость. Таблица из пяти колонок говорила те же
+  // числа, но не отвечала на вопрос «что мне с этим делать прямо сейчас».
+  const icons = eco.warehouses.map((warehouse) => iconHtml({
+    tier: 1, tip: 'wh', key: warehouse.resource, cap: warehouse.name,
+    glyph: STORAGE_GLYPH[warehouse.resource] || '▪',
+    poor: false,
+    cnt: warehouse.isFull ? 'полон' : Math.round(warehouse.fillRatio * 100) + '%',
+    cntCls: warehouse.isFull && warehouse.collectible ? 'ok' : (warehouse.isFull ? 'warn' : ''),
+    bar: warehouse.fillRatio,
+    onclick: 'TD.tab(\'eco\')'
+  })).join('');
 
   body.innerHTML =
-    '<table><tr><th>склад</th><th class="num">есть</th><th class="num">ставка</th><th class="num">заполн.</th><th class="num">через</th></tr>' + rows + '</table>' +
+    '<div class="muted">Склады: полоса — заполнение, наведение — ставка и когда полон</div>' +
+    '<div class="icoGrid">' + icons + '</div>' +
     '<div class="row" style="margin-top:8px"><button onclick="TD.collect()">Собрать склад</button>' +
     '<button onclick="TD.assist()">Помощь друга (+' + eco.energy.assist.units + '⚡)</button>' +
     '<span class="pill">' + eco.energy.assist.usedToday + '/' + eco.energy.assist.limitPerDay + ' сегодня</span></div>' +
@@ -2691,36 +3555,13 @@ function renderPower() {
 
   tag.innerHTML = p.isBalanced ? ok('баланс') : bad('дефицит');
 
+  // Узел сети кликабелен тем же подсказчиком, что и иконка: «3/4 · нет азота» без
+  // объяснения, ЧТО делает этот конвертер, учит игрока догадываться по названию.
   const nodes = (p.rows || []).map((r) =>
-    '<tr><td>' + esc(r.name) + (r.source === 'unit' ? ' <span class="muted">(техника)</span>' : '') + '</td>' +
+    '<tr><td' + (r.source === 'structure' ? ' data-tip="st" data-key="' + r.code + '"' : '') + '>' + esc(r.name) +
+    (r.source === 'unit' ? ' <span class="muted">(техника)</span>' : '') + '</td>' +
     '<td class="num">' + r.online + '/' + r.instances + '</td>' +
     '<td class="num">' + (r.reason ? bad(WHY[r.reason] || r.reason) : ok('в строю')) + '</td></tr>').join('');
-
-  // Колонка «SEC» — цена СЛЕДУЮЩЕГО экземпляра (витрина считает её с ростом).
-  // Подсвечиваем красным только когда монеты реально не хватает: сама по себе цена
-  // не ошибка, а «строить» с серым прайсом было бы обманом — игрок нажал бы и получил
-  // INSUFFICIENT_FUNDS от сервера, который всегда вправе отказать.
-  const secWallet = eco.resources.secSpendable;
-  // Короткие имена руды для колонки добычи берутся из того же ответа, что и таблица
-  // складов: фронт не переводит `ferrum` по собственной таблице — тот же запрет,
-  // что на цены сооружений и на «нужно ещё N астерия» в панели клана.
-  const oreName = {};
-  (eco.warehouses || []).forEach((w) => { oreName[w.resource] = w.name; });
-  const mineCell = (s) => s.mine
-    ? '<td class="num ok">+' + fmtNum(s.mine.perHour) + '/ч ' +
-      s.mine.resources.map((r) => esc(oreName[r] || r)).join('·') + '</td>'
-    : '<td class="num muted">—</td>';
-  const buildings = (eco.structures || []).map((s) =>
-    '<tr><td>' + esc(s.name) + ' <span class="muted">T' + s.tier + '</span>' +
-    (s.unlocked ? '' : ' <span class="err" title="не выполнен предшественник">🔒</span>') + '</td>' +
-    '<td class="num">' + s.count + '</td>' +
-    '<td class="num muted">' + (s.power >= 0 ? '+' : '') + fmtNum(s.power) + '</td>' +
-    '<td class="num muted">' + fmtNum(s.heat) + '</td>' +
-    mineCell(s) +
-    '<td class="num' + (s.secCost > secWallet ? ' err' : '') + '" title="цена следующего экземпляра">' +
-    (s.secCost > 0 ? fmtNum(s.secCost) : '—') + '</td>' +
-    '<td class="num"><button' + (s.unlocked ? '' : ' disabled') +
-    ' onclick="TD.buildStructure(\'' + s.id + '\')">строить</button></td></tr>').join('');
 
   body.innerHTML =
     '<table>' +
@@ -2734,8 +3575,9 @@ function renderPower() {
     (nodes
       ? '<table><tr><th>узел</th><th class="num">онлайн</th><th class="num">причина</th></tr>' + nodes + '</table>'
       : '<div class="muted" style="margin:6px 0">сеть пуста: постройте плазменный конвертер</div>') +
-    '<table><tr><th>сооружение</th><th class="num">шт</th><th class="num">кВт</th><th class="num">тепло</th><th class="num">добыча</th><th class="num">SEC</th><th class="num"></th></tr>' +
-    buildings + '</table>' +
+    '<div class="muted" style="margin:6px 0 2px">Что построить: значок = сооружение, наведение = зачем и за что</div>' +
+    structureGridHtml() +
+    structureCardHtml() +
     '<p class="hint">Веер бинарный: стойка либо стоит, либо глуха — никакого «работает на 73%». ' +
     'Глухая башня остаётся на карте и принимает урон, но не стреляет; тяжёлая техника ' +
     'горит дейтерием, а не электричеством базы.</p>';
@@ -2784,8 +3626,7 @@ function renderClan() {
   const clan = membership.clan;
 
   if (!clan) {
-    const WHY = { ok: '', member: 'вы уже в клане', funds: 'не хватает астерия', debt: 'долг по донату' };
-    tag.innerHTML = membership.canCreate ? '<span class="ok">готов основать</span>' : (WHY[membership.reason] || 'нет клана');
+    tag.innerHTML = membership.canCreate ? '<span class="ok">готов основать</span>' : (CLAN_WHY[membership.reason] || 'нет клана');
     body.innerHTML =
       '<table>' +
       row('стоимость основания', fmtNum(rules.createCost) + ' астерия') +
@@ -3786,9 +4627,42 @@ const TD = {
   armyAll: setArmyAll,
   exitReplay,
 
+  // ─── Правая колонка: ярлыки и выбор иконкой ─────────────────────────────────
+  // Выбор и действие разведены нарочно: клик по иконке только рассказывает о ней
+  // (карточка раскрывается под сеткой), а списание материалов происходит по кнопке
+  // в карточке. На тачскрине случайное касание стоит железа 1500.
+  tab(id) {
+    setTab(id);
+    if (id === 'log') S.logErr = 0;
+    renderTabs();
+  },
+
+  selectBp(code) {
+    S.bpSel = code;
+    tipHide();
+    renderShop();
+  },
+
+  selectSt(id) {
+    S.stSel = S.stSel === id ? null : id;
+    tipHide();
+    renderPower();
+  },
+
+  selectItem(id) {
+    S.itemSel = S.itemSel === id ? null : id;
+    tipHide();
+    renderInventory();
+  },
+
   pick(itemId) {
     S.picked = itemId;
+    S.itemSel = itemId;
     selectTool('tower');
+    // Башню ставят на поле, поэтому ангар сам собой уступает ему место: держать
+    // открытой панель «Ангар» ради одного клика — значит заставить игрока крутить
+    // колонку вместо карты.
+    setTab('base');
     const item = itemOf(itemId);
     log('выбрана ' + (item ? item.name : itemId) + ' — кликните по свободной клетке');
     renderInventory();
@@ -3796,7 +4670,8 @@ const TD = {
   },
 
   build() {
-    const code = $('bpSelect') && $('bpSelect').value;
+    const code = S.bpSel;
+    if (!code) return log('выберите чертёж', 'err');
     return act('стройка', async function () {
       const result = await api('POST', '/v1/workshop/build', { code });
       log('начато: ' + result.result.blueprint.name + ' · ' + fmtMs(leftMs(result.result.job)), 'ok');
@@ -3867,10 +4742,11 @@ const TD = {
    * Фронт не угадывает природу постройки — он читает `result.structure`.
    */
   buildStructure(code) {
-    return act('стройка ' + code, async function () {
+    const name = (findStructure(code) || {}).name || code;
+    return act('стройка ' + name, async function () {
       const result = await api('POST', '/v1/workshop/build', { code });
       const left = leftMs(result.result.job);
-      log('в очередь: ' + code + (result.result.structure ? ' (сооружение)' : '') +
+      log('в очередь: ' + ((result.result.structure || {}).name || name) +
         ' · ' + fmtMs(left) + ' · роботов занято ' + result.result.busy, 'ok');
     });
   },
@@ -3981,36 +4857,22 @@ window.TD = TD;
 
 // ─── Плотность интерфейса ─────────────────────────────────────────────────────
 /*
- * Панели сворачиваются, и их состояние переживает перезагрузку.
+ * Раздел правой колонки переживает перезагрузку страницы.
  *
- * Без этого уплотнение не решает задачу: игрок заново сворачивает клан с рынком каждый
- * раз, чтобы увидеть очередь стройки. Ключ один на всё хранилище полигона — те же
- * `td.play.*`, что и токен с настройками вида.
+ * Раньше запоминалось состояние каждого `<details>` — десять флагов, из которых
+ * игрок всё равно каждый раз доставал нужный. Теперь запоминается ОДИН открытый
+ * ярлык: ключ тот же семьи `td.play.*`, что токен с настройками вида.
  */
-const PANEL_KEY = 'td.play.panels';
-
-function bindPanels() {
-  let saved = {};
+function bindTabs() {
+  buildTabs();
+  let saved = null;
   try {
-    saved = JSON.parse(localStorage.getItem(PANEL_KEY) || '{}') || {};
+    saved = localStorage.getItem(TAB_KEY);
   } catch {
-    saved = {};
+    saved = null;
   }
-  const boxes = document.querySelectorAll('aside details.panel');
-  for (const box of boxes) {
-    if (Object.prototype.hasOwnProperty.call(saved, box.id)) box.open = Boolean(saved[box.id]);
-    // Событие `toggle` браузер даёт само — самописный обработчик клика здесь не нужен,
-    // и именно поэтому он переживает любую перерисовку содержимого панели.
-    box.addEventListener('toggle', () => {
-      const state = {};
-      for (const item of boxes) state[item.id] = item.open;
-      try {
-        localStorage.setItem(PANEL_KEY, JSON.stringify(state));
-      } catch {
-        // Приватный режим без хранилища: панель просто не запомнится, игра работает.
-      }
-    });
-  }
+  S.tab = TABS.some((tab) => tab.id === saved) ? saved : 'eco';
+  renderTabs();
 }
 
 /**
@@ -4045,6 +4907,9 @@ function renderAll() {
   renderClan();
   renderMarket();
   renderAnalysis();
+  // Бейджи ярлыков — часть общего рендера: они показывают состояние тех же панелей,
+  // что перерисовываются выше, и устаревший бейдж врёт громче устаревшей таблицы.
+  renderTabs();
   if (!S.replay) draw();
 }
 
@@ -4087,7 +4952,8 @@ function frame(now) {
 async function boot() {
   bindBoard();
   bindViewToggles();
-  bindPanels();
+  bindTabs();
+  bindTips();
   bindResize();
   $('btnLogin').addEventListener('click', login);
   $('btnRefresh').addEventListener('click', refresh);

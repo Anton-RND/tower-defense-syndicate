@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { BLUEPRINTS, MAX_INVENTORY_ITEMS, getBlueprint, isMaterialId, materialEntries } from '../src/config/workshop.js';
-import { ORE_IDS } from '../src/config/storage.js';
+import { BLUEPRINTS, MATERIAL_LABEL, MAX_INVENTORY_ITEMS, getBlueprint, isMaterialId, materialEntries, type MaterialId } from '../src/config/workshop.js';
+import { ORE_IDS, STORAGE_LABEL } from '../src/config/storage.js';
 import { MAX_STRUCTURE_TOTAL, STRUCTURES, getStructure, miningBonus, structureSecCost, type StructureDef, type StructureId } from '../src/config/structures.js';
 import { unitPowerProfile } from '../src/modules/economy/power.js';
 import { AppError, ErrorCodes } from '../src/lib/errors.js';
@@ -181,6 +181,40 @@ describe('workshop/structures: целостность реестра', () => {
     }
     for (const code of ['tower_laser_mk1', 'tower_rail_mk2', 'tower_plasma_mk3']) {
       expect(unitPowerProfile(code)?.class).toBe('grid');
+    }
+  });
+});
+
+describe('workshop/structures: витрина подсказок', () => {
+  it('у каждого сооружения есть «зачем»', () => {
+    // Подсказка к иконке — единственное место, где игрок узнаёт назначение ДО
+    // покупки. Пустое `role` витрина не запретит, а покажет: получится иконка с
+    // цифрами и без объяснения, то есть ровно та «неинформативная панель», из-за
+    // которой иконки и делались.
+    for (const def of STRUCTURES) {
+      expect((def.role ?? '').trim(), `${def.id}: role пустая`).toBeTruthy();
+      expect((def.role ?? '').length, `${def.id}: role короче объяснения`).toBeGreaterThan(23);
+    }
+  });
+
+  it('каждый материал цены имеет подпись: витрина не показывает сырое id', () => {
+    // `cost` — данные, и опечатка в её ключе уже поймана выше (`materialEntries`).
+    // Здесь другая поломка: материал в реестре есть, а русского имени нет — и
+    // игрок читает в подсказке «7000 ferrum», что хуже отсутствующей подсказки.
+    for (const def of STRUCTURES) {
+      for (const id of Object.keys(def.cost)) {
+        expect(isMaterialId(id), `${def.id}: неизвестный материал ${id}`).toBe(true);
+        expect(MATERIAL_LABEL[id as MaterialId], `${def.id}: нет подписи у ${id}`).toBeTruthy();
+      }
+    }
+  });
+
+  it('подписаны все накопители, которыми сооружения платят и которые наполняют', () => {
+    for (const def of STRUCTURES) {
+      for (const resource of [def.fuel?.resource, def.output?.resource, ...(def.storage?.resources ?? []), ...(def.mine?.resources ?? [])]) {
+        if (!resource) continue;
+        expect(STORAGE_LABEL[resource], `${def.id}: нет подписи у ${resource}`).toBeTruthy();
+      }
     }
   });
 });

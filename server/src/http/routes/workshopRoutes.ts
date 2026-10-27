@@ -6,11 +6,18 @@ import {
   BUILD_CANCEL_REFUND_RATE,
   isJunkId,
   JUNK_IDS,
+  MATERIAL_LABEL,
   MAX_BUILD_QUEUE,
   RECYCLE_MAX_BATCH,
   RECYCLE_RECIPES
 } from '../../config/workshop.js';
-import { MAX_STRUCTURE_TOTAL, STRUCTURES } from '../../config/structures.js';
+import { STORAGE_LABEL } from '../../config/storage.js';
+import {
+  HEAT_PER_NITROGEN,
+  MAX_STRUCTURE_TOTAL,
+  STRUCTURES
+} from '../../config/structures.js';
+import { UNIT_POWER_PROFILE } from '../../modules/economy/power.js';
 import { rngFromKey } from '../../lib/rng.js';
 import {
   applyChroniumSpeedup,
@@ -57,7 +64,41 @@ export function registerWorkshopRoutes(app: FastifyInstance, ctx: AppContext): v
      * совпадать с кассой, иначе игрок проверяет её на первом же отменённом реакторе.
      */
     cancel: { graceRatio: BUILD_CANCEL_GRACE_RATIO, refundRate: BUILD_CANCEL_REFUND_RATE },
-    junk: JUNK_IDS.map((id) => ({ id, recipe: RECYCLE_RECIPES[id] }))
+    junk: JUNK_IDS.map((id) => ({ id, recipe: RECYCLE_RECIPES[id] })),
+    /**
+     * Подписи материалов и накопителей.
+     *
+     * Витрина называет цену своими словами, только чтобы однажды назвать
+     * `colored_metal` «бронзой» и продать её вдвое дешевле, чем взяла касса. Словарь
+     * на сервере один (`MATERIAL_LABEL`, `STORAGE_LABEL`), и подсказка обязана
+     * говорить его же голосом.
+     */
+    labels: { materials: MATERIAL_LABEL, storage: STORAGE_LABEL },
+    /**
+     * Как техника стоит в энергосети базы: `grid` (проводная), `battery` (заряд от
+     * резерва), `autonomous` (свой реактор, ест дейтерий).
+     *
+     * Отдаётся профилем, а не пересказывается фронту: «тяжёлый рельсган не жрёт
+     * электричество штаба» — это свойство класса, и придумывать его в разметке
+     * нельзя.
+     */
+    units: UNIT_POWER_PROFILE,
+    /**
+     * От кольца «мощность ↔ охлаждение» витрине нужна ровно одна его константа:
+     * без `heatPerNitrogen` подсказка про азот была бы гаданием.
+     *
+     * `baseSupply` и `passiveCooling` здесь лежали и убраны: страница не читала их
+     * ни разу, хотя комментарий выше утверждал обратное. Оба числа доходят до
+     * игрока составными — `economy.power.supplyOnline` и `economy.power.coolingCap`
+     * считаются от тех же констант (`modules/economy/power.ts`), поэтому отдельная
+     * сырая константа в каталоге была не «данные для подсказки», а второй источник
+     * правды. Мёртвое поле в ответе стареет молча: правит его тот, кто читает
+     * маршрут, а замечает — только тот, кто читает витрину. За это отвечает
+     * `http.frontend-contract.test.ts`, раздел про поля ответа.
+     */
+    power: {
+      heatPerNitrogen: HEAT_PER_NITROGEN
+    }
   }));
 
   app.post('/v1/workshop/build', auth, async (request) => {

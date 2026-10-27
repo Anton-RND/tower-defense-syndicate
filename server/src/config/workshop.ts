@@ -139,7 +139,45 @@ export interface Blueprint {
   salvageRate?: number;
   /** Таблица хлама в режиме «scrap». */
   scrap: ScrapDrop[];
+  /**
+   * Одна строка «зачем это игроку». Витрина показывает её в подсказке к иконке.
+   *
+   * Поле есть у каждого чертежа — это проверяет тест целостности таблицы в
+   * `workshop.blueprints.test.ts`. Оно необязательное в типе только потому, что
+   * `Blueprint` используется и как тип результата `getBlueprint`, а вот молчать в
+   * витрине новый чертёж не должен: иконка без объяснения — это кнопка «не понимаю,
+   * зачем, но дорого».
+   */
+  role?: string;
 }
+
+/**
+ * Русские подписи всего, чем чертеж или стройка сооружения способна заплатить.
+ *
+ * Держится здесь, а не переводится фронтом по своей таблице, по тому же правилу,
+ * что `STORAGE_LABEL` и `TECH_LABEL`: витрина, назвавшая материал своим именем,
+ * однажды назовёт `colored_metal` «бронзой» и продаст его в два раза дешевле, чем
+ * касса спишет. Здесь список полон по типу `MaterialId`, поэтому новый материал
+ * без подписи не компилируется.
+ */
+export const MATERIAL_LABEL: Readonly<Record<MaterialId, string>> = {
+  ferrum: 'железо',
+  silicium: 'кремний',
+  uranium: 'уран',
+  plasma: 'плазма',
+  black_metal: 'чёрмет',
+  colored_metal: 'цветмет',
+  precious_metal: 'драгмет',
+  chips: 'чипы',
+  boards: 'платы',
+  engines: 'двигатели',
+  transmissions: 'трансмиссии',
+  batteries: 'аккумуляторы',
+  ammo_casings: 'гильзы',
+  chronium: 'хрониум',
+  wolfram: 'вольфрам',
+  stanium: 'станиум'
+};
 
 /** Доля возврата по умолчанию: 50% от вложенного — классический «разобрал и начал заново». */
 export const SALVAGE_RATE_DEFAULT = 0.5;
@@ -205,6 +243,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     kind: 'tower',
     name: 'Лазерная турель Mk.I',
     tier: 1,
+    role: 'Дешёвая скорострельная башня: закрывает углы и повороты лабиринта, не греется и почти не ест сеть — с неё начинают оборону.',
     cost: { ferrum: 200, silicium: 100, chips: 2 },
     buildMs: 10 * 60_000,
     scrap: [
@@ -218,6 +257,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     kind: 'tower',
     name: 'Рельсотрон Mk.II',
     tier: 2,
+    role: 'Основной урон обороны: бьёт дальше и больнее лазера, но греется — под него нужен азотный контур, а не только реактор.',
     cost: { ferrum: 600, silicium: 250, black_metal: 120, wolfram: 25, boards: 4 },
     buildMs: 45 * 60_000,
     scrap: [
@@ -231,6 +271,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     kind: 'tower',
     name: 'Плазменный резонатор Mk.III',
     tier: 3,
+    role: 'Верхняя башня: самый большой урон и самая длинная рука у штаба. Платит за это трёхчасовой сборкой и заметным куском сети.',
     cost: { ferrum: 1200, uranium: 300, colored_metal: 200, precious_metal: 80, wolfram: 40, engines: 2 },
     buildMs: 3 * 60 * 60_000,
     salvageRate: 0.6,
@@ -245,6 +286,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     kind: 'drone',
     name: 'Грузовой дрон',
     tier: 1,
+    role: 'Дрон первого тира: по технике бьёт слабо, зато живучий — им разбивают стены и принимают на себя огонь башен, пока идёт тяжёлый рой.',
     cost: { ferrum: 150, silicium: 150, batteries: 2 },
     buildMs: 20 * 60_000,
     scrap: [
@@ -257,6 +299,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     kind: 'drone',
     name: 'Ударный дрон Mk.II',
     tier: 2,
+    role: 'Рабочая лошадь рейда: первый по-настоящему опасный штурмовик и главная масса армии до появления «Цербера».',
     cost: { ferrum: 400, silicium: 300, colored_metal: 90, chips: 3, transmissions: 2 },
     buildMs: 60 * 60_000,
     scrap: [
@@ -270,6 +313,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     kind: 'weapon',
     name: 'Автоматическая пушка',
     tier: 1,
+    role: 'Орудие, а не башня: занимает клетку в лабиринте, бьёт сильнее башни того же тира, но короче стреляет и её можно снести.',
     cost: { ferrum: 400, ammo_casings: 6 },
     buildMs: 30 * 60_000,
     scrap: [
@@ -282,6 +326,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     kind: 'weapon',
     name: 'Корабельный рельсган',
     tier: 3,
+    role: 'Дальнобой орудия: накрывает дорогу из глубины базы. Живёт на собственном реакторе — ест дейтерий, а не электричество штаба.',
     // Вольфрам вместо драгметалла: корабельный рельсган — это тяжёлая индуктивность
     // и упоры, а не электроника. Драгметалл остаётся там, где без него не обойтись
     // (проводника, чипы), а «суровая» часть ушла в промышленный вольфрам.
@@ -308,6 +353,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     tier: 3,
     cost: { black_metal: 20, colored_metal: 80, precious_metal: 15 },
     buildMs: advancedMs(300),
+    role: 'Тяжёлое орудие тир-3 за одни переработанные металлы: куда сбыть цветмет и драгмет, не трогая железо.',
     salvageRate: 0.6,
     scrap: [
       { junk: 'chips', chance: 0.9, min: 2, max: 6 },
@@ -324,6 +370,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     // Драгметалл из рецепта выведен полностью — его место занял промышленный вольфрам.
     cost: { black_metal: 150, colored_metal: 40, wolfram: 50 },
     buildMs: advancedMs(600),
+    role: 'Самый сильный стрелок базы по урону и самый долгий в сборке: ставят, когда металл уже некуда девать.',
     salvageRate: 0.6,
     scrap: [
       { junk: 'ammo_casings', chance: 1, min: 6, max: 14 },
@@ -340,6 +387,7 @@ export const BLUEPRINTS: readonly Blueprint[] = [
     // Вольфрам — ключевые узлы (упоры гирокольцев, ствольная группа роя).
     cost: { black_metal: 10, colored_metal: 50, precious_metal: 25, wolfram: 20 },
     buildMs: advancedMs(180),
+    role: 'Главный кулак рейда: один предмет выставляет рой из четырёх машин тир-3 и живёт на собственном реакторе.',
     salvageRate: 0.6,
     scrap: [
       { junk: 'chips', chance: 0.9, min: 2, max: 5 },

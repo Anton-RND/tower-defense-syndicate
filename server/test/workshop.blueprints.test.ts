@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ADVANCED_TIME_SCALE,
   BLUEPRINTS,
+  MATERIAL_LABEL,
   METAL_IDS,
   getBlueprint,
   materialEntries,
@@ -10,6 +11,7 @@ import {
   type MaterialId,
   type MetalId
 } from '../src/config/workshop.js';
+import { publicUnitProfiles } from '../src/config/pvp.js';
 import { isCraftTechId, type CraftTechId } from '../src/config/materials.js';
 import { MINUTE } from './fixtures.js';
 
@@ -61,10 +63,63 @@ describe('чертежи: целостность таблицы', () => {
     }
   });
 
+  it('у каждого чертежа есть «зачем»: подсказка обязана объяснять назначение', () => {
+    // Витрина показывает `role` первой строкой карточки, и пустое поле она не
+    // запретит — просто нарисуует иконку без объяснения. Проверка здесь, а не в
+    // типе, потому что `role` намеренно необязательна: `Blueprint` — ещё и тип
+    // результата `getBlueprint`, а вот молчать в подсказке чертёж не вправе.
+    for (const item of BLUEPRINTS) {
+      expect((item.role ?? '').trim(), `${item.code}: role пустая`).toBeTruthy();
+      expect((item.role ?? '').length, `${item.code}: role короче объяснения`).toBeGreaterThan(23);
+    }
+  });
+
+  it('каждый материал цены подписан по-русски', () => {
+    for (const item of BLUEPRINTS) {
+      for (const [id] of materialEntries(item.cost)) {
+        expect(MATERIAL_LABEL[id], `${item.code}: нет подписи у ${id}`).toBeTruthy();
+      }
+    }
+  });
+
   it('salvage-возврат никогда не превышает вложенное (потолок по уровню 1)', () => {
     for (const item of BLUEPRINTS) {
       expect(salvageRateOf(item), item.code).toBeGreaterThan(0);
       expect(salvageRateOf(item), item.code).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe('чертежи: боевые карточки витрины', () => {
+  it('каждый чертёж имеет профиль L1 с ненулевыми цифрами', () => {
+    // Подсказка к иконке мастерской обещает игроку урон, прочность и радиус ДО
+    // покупки. Профиль считается теми же `robotProfileOf`/`defenseProfileOf`, что и
+    // бой, поэтому нуль здесь означал бы не дырку в витрине, а непобедимую башню.
+    const profiles = publicUnitProfiles();
+    for (const item of BLUEPRINTS) {
+      const profile = profiles[item.code];
+      expect(profile, `${item.code}: нет профиля`).toBeTruthy();
+      expect(profile!.dps, `${item.code}: нулевой урон`).toBeGreaterThan(0);
+      expect(profile!.hp, `${item.code}: нулевая прочность`).toBeGreaterThan(0);
+      expect(profile!.range, `${item.code}: нулевой радиус`).toBeGreaterThan(0);
+      expect(profile!.role, `${item.code}: карточка без «зачем»`).toBeTruthy();
+    }
+  });
+
+  it('штурмовики описаны скоростью и роем, оборона — нет', () => {
+    // Выбор профиля в `publicUnitProfiles` молчалив: ошибись он обороной для дрона —
+    // и игрок прочитает в подсказке «башню» вместо машины, не понимающей, почему
+    // её не поставить на карту.
+    const profiles = publicUnitProfiles();
+    for (const item of BLUEPRINTS) {
+      const profile = profiles[item.code];
+      if (item.kind === 'drone') {
+        expect(profile!.speed, item.code).toBeGreaterThan(0);
+        expect(profile!.squad, item.code).toBeGreaterThanOrEqual(1);
+      } else {
+        expect(profile!.speed, item.code).toBeNull();
+        expect(profile!.squad, item.code).toBeNull();
+      }
     }
   });
 });

@@ -204,6 +204,14 @@ export interface StructureDef {
    * источника расхождений.
    */
   secCostGrowth?: number;
+  /**
+   * Одна строка «зачем это игроку» для подсказки к иконке.
+   *
+   * Проверка полноты — в `workshop.structures.test.ts`: сооружение без объяснения
+   * витрина вынуждена продавать одними цифрами (кВт, тепло, /ч), а игрок читает их
+   * как «непонятно, но дорого» и не строит.
+   */
+  role?: string;
 }
 
 /**
@@ -308,6 +316,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'bore_ore_mk1',
     name: 'Рудный бур Mk.I',
     tier: 1,
+    role: 'Поднимает добычу выше базовой ставки: роет железо и кремний и при этом не трогает сеть вовсе (0 кВт).',
     cost: { ferrum: 250, silicium: 120, black_metal: 60 },
     buildMs: 15 * 60_000,
     maxPerBase: 8,
@@ -320,6 +329,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'bore_ore_mk2',
     name: 'Рудный бур Mk.II',
     tier: 2,
+    role: '×2,75 к ставке добычи и третий вид руды — уран, без которого центрифуги не знают, что перерабатывать.',
     cost: { ferrum: 1500, silicium: 800, black_metal: 300, colored_metal: 60, boards: 10 },
     buildMs: 90 * 60_000,
     maxPerBase: 8,
@@ -333,6 +343,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'bore_ore_mk3',
     name: 'Рудный бур Mk.III',
     tier: 3,
+    role: 'Единственный бур, берущий плазму: без него все конвертеры висят на базовой ставке 2/ч, и весь энергетический этаж игры упирается в неё.',
     cost: { ferrum: 5500, silicium: 2600, black_metal: 900, colored_metal: 500, wolfram: 120, boards: 40 },
     buildMs: 8 * 60 * 60_000,
     maxPerBase: 6,
@@ -357,6 +368,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'reactor_plasma_mk1',
     name: 'Плазменный конвертер Mk.I',
     tier: 1,
+    role: 'Сердце энергетики: всё, что выше штабных 20 кВт, берётся отсюда. Платит за это плазмой и теплом, которое надо отводить.',
     cost: { ferrum: 1200, silicium: 600, chips: 8, black_metal: 150 },
     buildMs: 60 * 60_000,
     maxPerBase: 12,
@@ -369,6 +381,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'reactor_plasma_mk2',
     name: 'Плазменный конвертер Mk.II',
     tier: 2,
+    role: '×2,7 мощности с того же места в реестре, но и плазмы в 2,4 раза больше: имеет смысл, когда бур тир-3 уже льёт плазму.',
     cost: { ferrum: 3000, silicium: 1400, black_metal: 600, colored_metal: 250, boards: 20, wolfram: 40 },
     buildMs: 4 * 60 * 60_000,
     maxPerBase: 8,
@@ -382,6 +395,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'reactor_plasma_mk3',
     name: 'Плазменный конвертер Mk.III',
     tier: 3,
+    role: '800 кВт и 150 кВт-тепла: пассивного радиатора штаба на него давно не хватает, ставится только вместе с настоящим крио-контуром.',
     cost: {
       ferrum: 7000,
       silicium: 3000,
@@ -408,6 +422,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'cooler_loop_mk1',
     name: 'Крио-контур Mk.I',
     tier: 1,
+    role: 'Отводит 40 кВт-тепла ценой 6 кВт из сети. Чем больше греющейся техники, тем длиннее должен быть этот контур: перегрев глушит реакторы, а не только стойки.',
     cost: { ferrum: 400, colored_metal: 120, boards: 4 },
     buildMs: 30 * 60_000,
     maxPerBase: 24,
@@ -420,6 +435,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'cooler_loop_mk2',
     name: 'Крио-контур Mk.II',
     tier: 2,
+    role: '100 кВт отвода против 40 у Mk.I: нужен под центрифуги и стойки тир-2 и выше, где одного контура на 40 уже не хватает.',
     cost: { ferrum: 900, colored_metal: 400, precious_metal: 80, boards: 12 },
     buildMs: 90 * 60_000,
     maxPerBase: 16,
@@ -439,6 +455,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'nitro_plant_mk1',
     name: 'Азотная станция Mk.I',
     tier: 1,
+    role: 'Производит азот — хладагент всего охлаждения. Сама греется на 10 кВт, поэтому строится вместе с крио-цистерной и контуром, а не вместо них.',
     cost: { ferrum: 800, silicium: 400, black_metal: 200, chips: 6 },
     buildMs: 45 * 60_000,
     maxPerBase: 10,
@@ -452,6 +469,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'nitro_plant_mk2',
     name: 'Азотная станция Mk.II',
     tier: 2,
+    role: '×2,75 выпуска азота и ×2,3 потребления: кормит большой контур охлаждения, когда станций тир-1 уже не хватает.',
     cost: { ferrum: 2000, silicium: 900, colored_metal: 350, boards: 15, wolfram: 30 },
     buildMs: 3 * 60 * 60_000,
     maxPerBase: 6,
@@ -465,6 +483,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'centrifuge_mk1',
     name: 'Центрифуга Mk.I',
     tier: 1,
+    role: 'Превращает уран в дейтерий — топливо всей тяжёлой техники, которая живёт на собственных реакторах и сеть базы не ест.',
     cost: { ferrum: 1000, silicium: 500, black_metal: 300, chips: 10 },
     buildMs: 90 * 60_000,
     maxPerBase: 8,
@@ -479,6 +498,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'centrifuge_mk2',
     name: 'Центрифуга Mk.II',
     tier: 2,
+    role: '×4 к выпуску дейтерия и ×4 к расходу урана: открывает армию тир-3, упор в ней всегда бак дейтерия.',
     cost: { ferrum: 2500, silicium: 1200, colored_metal: 400, boards: 18, wolfram: 45 },
     buildMs: 5 * 60 * 60_000,
     maxPerBase: 5,
@@ -505,6 +525,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'asic_rack_mk1',
     name: 'ASIC-стойка Mk.I',
     tier: 1,
+    role: 'Единственный источник монеты SEC. Первый экземпляр сознательно бесплатен в деньгах: доход начинается отсюда, а плата за рост начинается на Mk.II.',
     cost: { ferrum: 500, silicium: 300, chips: 12, colored_metal: 60 },
     buildMs: 40 * 60_000,
     maxPerBase: 20,
@@ -518,6 +539,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'asic_rack_mk2',
     name: 'ASIC-стойка Mk.II',
     tier: 2,
+    role: '×2 дохода на стойку, но цена в SEC растёт с каждым экземпляром: окупается медленнее, чем Mk.I, и первой гасится веером при дефиците мощности.',
     cost: { ferrum: 1200, silicium: 700, chips: 40, boards: 20, precious_metal: 60 },
     buildMs: 2 * 60 * 60_000,
     maxPerBase: 14,
@@ -536,6 +558,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'asic_rack_mk3',
     name: 'ASIC-стойка Mk.III',
     tier: 3,
+    role: '×3 дохода на стойку и ×3,3 тепла: выгодна ровно настолько, насколько построен контур охлаждения, и больше ниоткуда.',
     cost: { ferrum: 2600, silicium: 1500, chips: 90, boards: 45, precious_metal: 180, wolfram: 60 },
     buildMs: 6 * 60 * 60_000,
     maxPerBase: 8,
@@ -555,6 +578,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'silo_mk1',
     name: 'Рудный силос',
     tier: 1,
+    role: '+1500 ко всем четырём рудам. Ёмкость решает режим игры: собирать раз в сутки или высматривать переполнение каждый час.',
     cost: { ferrum: 300, black_metal: 100 },
     buildMs: 20 * 60_000,
     maxPerBase: 20,
@@ -567,6 +591,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'gasometer_mk1',
     name: 'Газгольдер дейтерия',
     tier: 1,
+    role: '+800 дейтерия и предпосылка любой центрифуги: некуда лить — цех встаёт по переполнению, сжигая уран впустую.',
     cost: { ferrum: 600, colored_metal: 200, boards: 5 },
     buildMs: 35 * 60_000,
     maxPerBase: 12,
@@ -579,6 +604,7 @@ export const STRUCTURES: readonly StructureDef[] = [
     id: 'cryo_tank_mk1',
     name: 'Крио-цистерна',
     tier: 1,
+    role: '+800 азота и предпосылка азотной станции: без цистерны производить хладагент некуда, и станция сразу встаёт.',
     cost: { ferrum: 600, colored_metal: 250, boards: 6 },
     buildMs: 35 * 60_000,
     maxPerBase: 12,
